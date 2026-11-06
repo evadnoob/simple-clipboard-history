@@ -9,8 +9,8 @@ final class PickerView: NSView {
     var onAction: ((PickerAction) -> Void)?
     /// Loads the stored items of a clip for the preview.
     var loadItems: ((Int64) -> [[Representation]])?
-    /// Shown in the bar: what Return does.
-    var returnHint = "copy"
+    /// Shown in the bar: "paste" or "copy", what recall does with the clip.
+    var recallVerb = "paste"
     var now: () -> Date = Date.init
 
     private var previewCache: (id: Int64, preview: ClipPreview)?
@@ -18,7 +18,7 @@ final class PickerView: NSView {
 
     init(model: PickerModel) {
         self.model = model
-        super.init(frame: NSRect(origin: .zero, size: PickerStyle.boxSize))
+        super.init(frame: NSRect(origin: .zero, size: InterfaceStyle.pickerSize))
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -31,7 +31,7 @@ final class PickerView: NSView {
 
     /// Tells the model how many rows fit. Call after a size or preview change.
     func updateRowCount() {
-        model.visibleRowCount = max(1, Int(floor(chrome.listRect.height / PickerStyle.rowHeight)))
+        model.visibleRowCount = max(1, Int(floor(chrome.listRect.height / InterfaceStyle.rowHeight)))
     }
 
     override func layout() {
@@ -39,45 +39,83 @@ final class PickerView: NSView {
         updateRowCount()
     }
 
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        updateRowCount()
+        needsDisplay = true
+    }
+
     // MARK: drawing
 
     override func draw(_ dirtyRect: NSRect) {
         let chrome = self.chrome
-        let count = model.rows.count
-        let detail = model.query.isEmpty ? "\(count.formatted()) clips" : "\(count.formatted()) matching"
-        chrome.draw(title: "Clipboard", detail: count >= PickerModel.resultLimit ? "\(detail)+" : detail)
+        chrome.draw()
+        if case .filters = model.step {
+            drawFilterRows(in: chrome.listRect)
+            drawBar(in: chrome.barRect)
+            return
+        }
         drawRows(in: chrome.listRect)
         if model.previewOpen { drawPreview(in: chrome.previewRect) }
         drawBar(in: chrome.barRect)
     }
 
     private func drawRows(in rect: NSRect) {
-        let gap = PickerStyle.gap
-        let rowHeight = PickerStyle.rowHeight
+        let gap = InterfaceStyle.gap
+        let rowHeight = InterfaceStyle.rowHeight
         if model.rows.isEmpty {
             let message = model.query.isEmpty ? "No clips yet" : "No clips match"
-            PickerStyle.draw(message, in: NSRect(x: rect.minX + gap, y: rect.minY, width: rect.width - gap * 2, height: rowHeight),
+            InterfaceStyle.draw(message, in: NSRect(x: rect.minX + gap, y: rect.minY, width: rect.width - gap * 2, height: rowHeight),
                              color: .secondaryLabelColor)
             return
         }
-        let numberWidth = PickerStyle.width(of: "9", font: PickerStyle.smallFont)
+        let numberWidth = InterfaceStyle.width(of: "9", font: InterfaceStyle.smallFont)
         for position in 0..<model.visibleRowCount {
             let index = model.firstRow + position
             guard index < model.rows.count else { break }
             let clip = model.rows[index]
             let row = NSRect(x: rect.minX, y: rect.minY + CGFloat(position) * rowHeight, width: rect.width, height: rowHeight)
-            if index == model.selectedIndex { PickerStyle.selectionFill(row) }
+            if index == model.selectedIndex { InterfaceStyle.selectionFill(row) }
             if position < 9 {
-                PickerStyle.draw("\(position + 1)", in: NSRect(x: row.minX + gap, y: row.minY, width: numberWidth, height: rowHeight),
-                                 font: PickerStyle.smallFont, color: .tertiaryLabelColor)
+                InterfaceStyle.draw("\(position + 1)", in: NSRect(x: row.minX + gap, y: row.minY, width: numberWidth, height: rowHeight),
+                                 font: InterfaceStyle.smallFont, color: .tertiaryLabelColor)
             }
             let detail = Self.rowDetail(clip, now: now())
-            let detailWidth = PickerStyle.width(of: detail, font: PickerStyle.smallFont)
-            PickerStyle.draw(detail, in: NSRect(x: row.maxX - gap - detailWidth, y: row.minY, width: detailWidth, height: rowHeight),
-                             font: PickerStyle.smallFont, color: .tertiaryLabelColor, alignment: .right)
+            let detailWidth = InterfaceStyle.width(of: detail, font: InterfaceStyle.smallFont)
+            InterfaceStyle.draw(detail, in: NSRect(x: row.maxX - gap - detailWidth, y: row.minY, width: detailWidth, height: rowHeight),
+                             font: InterfaceStyle.smallFont, color: .tertiaryLabelColor, alignment: .right)
             let textX = row.minX + gap * 2 + numberWidth
-            PickerStyle.draw(clip.preview, in: NSRect(x: textX, y: row.minY, width: max(0, row.maxX - gap * 2 - detailWidth - textX),
+            InterfaceStyle.draw(clip.preview, highlighting: model.query, in: NSRect(x: textX, y: row.minY, width: max(0, row.maxX - gap * 2 - detailWidth - textX),
                                                       height: rowHeight))
+        }
+    }
+
+    private func drawFilterRows(in rect: NSRect) {
+        let gap = InterfaceStyle.gap
+        let rowHeight = InterfaceStyle.rowHeight
+        if model.filterRows.isEmpty {
+            InterfaceStyle.draw("No filters match", in: NSRect(x: rect.minX + gap, y: rect.minY, width: rect.width - gap * 2,
+                                                               height: rowHeight), color: .secondaryLabelColor)
+            return
+        }
+        for position in 0..<model.visibleRowCount {
+            let index = model.firstFilterRow + position
+            guard index < model.filterRows.count else { break }
+            let row = NSRect(x: rect.minX, y: rect.minY + CGFloat(position) * rowHeight, width: rect.width, height: rowHeight)
+            switch model.filterRows[index] {
+            case .heading(let group):
+                InterfaceStyle.draw(group.rawValue, in: row.insetBy(dx: gap, dy: 0), font: InterfaceStyle.smallFont,
+                                    color: .secondaryLabelColor)
+            case .filter(let filter):
+                if index == model.selectedFilterIndex { InterfaceStyle.selectionFill(row) }
+                let summaryWidth = min(InterfaceStyle.width(of: filter.summary, font: InterfaceStyle.smallFont), row.width / 2)
+                InterfaceStyle.draw(filter.summary, in: NSRect(x: row.maxX - gap - summaryWidth, y: row.minY, width: summaryWidth,
+                                                               height: rowHeight),
+                                    font: InterfaceStyle.smallFont, color: .tertiaryLabelColor, alignment: .right)
+                let textX = row.minX + gap * 2
+                InterfaceStyle.draw(filter.name, highlighting: model.filterQuery, in: NSRect(x: textX, y: row.minY,
+                                                            width: max(0, row.maxX - gap * 2 - summaryWidth - textX), height: rowHeight))
+            }
         }
     }
 
@@ -121,42 +159,53 @@ final class PickerView: NSView {
         let style = NSMutableParagraphStyle()
         style.lineBreakMode = .byCharWrapping
         (text as NSString).draw(with: rect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
-                                attributes: [.font: PickerStyle.font, .foregroundColor: color, .paragraphStyle: style])
+                                attributes: [.font: InterfaceStyle.font, .foregroundColor: color, .paragraphStyle: style])
     }
 
     private func drawBar(in rect: NSRect) {
-        let gap = PickerStyle.gap
-        var hints = "Return \(returnHint)  Tab preview  Esc close"
+        let gap = InterfaceStyle.gap
+        let hints = barHints
+        let hintsWidth = min(InterfaceStyle.width(of: hints, font: InterfaceStyle.smallFont), rect.width * 0.65)
+        InterfaceStyle.draw(hints, in: NSRect(x: rect.maxX - hintsWidth, y: rect.minY, width: hintsWidth, height: rect.height),
+                            font: InterfaceStyle.smallFont, color: .tertiaryLabelColor, alignment: .right)
+        let statusWidth = max(0, rect.width - hintsWidth - gap)
+        let status = Self.tail(of: barStatus, fitting: statusWidth, font: InterfaceStyle.smallFont)
+        InterfaceStyle.draw(status, in: NSRect(x: rect.minX, y: rect.minY, width: statusWidth, height: rect.height),
+                            font: InterfaceStyle.smallFont, color: .secondaryLabelColor)
+    }
+
+    /// The left of the bar: the count, and the typed text when there is some. There is no input field.
+    var barStatus: String {
+        switch model.step {
+        case .clips:
+            let count = model.rows.count
+            let shown = count >= PickerModel.resultLimit ? "\(count.formatted())+" : count.formatted()
+            if model.query.isEmpty { return "\(shown) clips" }
+            return "\(shown) matching \"\(model.query)\""
+        case .filters:
+            let count = model.filterRows.filter { if case .filter = $0 { return true } else { return false } }.count
+            if model.filterQuery.isEmpty { return "\(count) filters" }
+            return "\(count) filters matching \"\(model.filterQuery)\""
+        }
+    }
+
+    /// The key hints at the right of the bar. "plain" and "formatted" swap with Always Paste Plain Text.
+    var barHints: String {
+        if case .filters = model.step { return "\u{21A9} \(recallVerb)  esc back" }
+        let alternate = model.alwaysPastePlainText ? "formatted" : "plain"
+        let main = "\u{21A9} \(recallVerb)\(model.alwaysPastePlainText ? " plain" : "")  \u{21E7}\u{21A9} \(alternate)  \u{2318}\u{21A9} filter"
         if model.previewOpen, let clip = model.selectedClip {
-            hints = "\(clip.kind), \(Format.bytes(clip.byteSize))  Return \(returnHint)  Esc back"
+            return "\(clip.kind), \(Format.bytes(clip.byteSize))  \(main)  esc back"
         }
-        let hintsWidth = min(PickerStyle.width(of: hints, font: PickerStyle.smallFont), rect.width / 2)
-        PickerStyle.draw(hints, in: NSRect(x: rect.maxX - hintsWidth, y: rect.minY, width: hintsWidth, height: rect.height),
-                         font: PickerStyle.smallFont, color: .tertiaryLabelColor, alignment: .right)
-        let prompt = ":"
-        let promptWidth = PickerStyle.width(of: prompt)
-        PickerStyle.draw(prompt, in: NSRect(x: rect.minX, y: rect.minY, width: promptWidth, height: rect.height),
-                         color: .secondaryLabelColor)
-        let queryX = rect.minX + promptWidth + gap / 2
-        let queryMaxWidth = max(0, rect.maxX - hintsWidth - gap - queryX)
-        let shown = Self.tail(of: model.query, fitting: queryMaxWidth - 2)
-        if shown.isEmpty {
-            PickerStyle.draw("type to search", in: NSRect(x: queryX + 3, y: rect.minY, width: queryMaxWidth, height: rect.height),
-                             color: .tertiaryLabelColor)
-        } else {
-            PickerStyle.draw(shown, in: NSRect(x: queryX, y: rect.minY, width: queryMaxWidth, height: rect.height))
-        }
-        // A bar cursor after the query.
-        let cursorX = queryX + (shown.isEmpty ? 0 : PickerStyle.width(of: shown)) + 1
-        NSColor.labelColor.setFill()
-        NSRect(x: cursorX, y: rect.minY + 3, width: 2, height: rect.height - 6).fill()
+        return "\(main)  tab preview  esc close"
     }
 
     /// The end of the text that fits the width, so the end of a long query stays visible.
-    static func tail(of text: String, fitting width: CGFloat) -> String {
+    static func tail(of text: String, fitting width: CGFloat, font: NSFont = InterfaceStyle.font) -> String {
+        guard InterfaceStyle.width(of: text, font: font) > width else { return text }
         var shown = Substring(text)
-        while !shown.isEmpty && PickerStyle.width(of: String(shown)) > width { shown = shown.dropFirst() }
-        return String(shown)
+        while !shown.isEmpty && InterfaceStyle.width(of: "\u{2026}" + shown, font: font) > width { shown = shown.dropFirst() }
+        return "\u{2026}" + shown
     }
 
     // MARK: keys and mouse
@@ -190,7 +239,10 @@ final class PickerView: NSView {
         case 121: return .pageDown
         case 115: return .home
         case 119: return .end
-        case 36, 76: return .enter
+        case 36, 76:
+            if flags == .command { return .enterFilter }
+            if flags == .shift { return .enterAlternate }
+            return .enter
         case 53: return .escape
         case 48: return .tab
         case 51:
@@ -219,22 +271,31 @@ final class PickerView: NSView {
         return .text(characters)
     }
 
+    /// The clip row (or in the filter step, the filter list row) under a point.
     func rowIndex(at point: NSPoint) -> Int? {
         let rect = chrome.listRect
         guard rect.contains(point) else { return nil }
-        let index = model.firstRow + Int(floor((point.y - rect.minY) / PickerStyle.rowHeight))
-        return index < model.rows.count ? index : nil
+        let offset = Int(floor((point.y - rect.minY) / InterfaceStyle.rowHeight))
+        switch model.step {
+        case .clips:
+            let index = model.firstRow + offset
+            return index < model.rows.count ? index : nil
+        case .filters:
+            let index = model.firstFilterRow + offset
+            guard index < model.filterRows.count, case .filter = model.filterRows[index] else { return nil }
+            return index
+        }
     }
 
     override func mouseDown(with event: NSEvent) {
         guard let index = rowIndex(at: convert(event.locationInWindow, from: nil)) else { return }
         model.select(index)
         needsDisplay = true
-        if event.clickCount >= 2, let clip = model.selectedClip { onAction?(.recall(clip.id)) }
+        if event.clickCount >= 2 { perform(.enter) }
     }
 
     override func scrollWheel(with event: NSEvent) {
-        let delta = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY / PickerStyle.rowHeight : event.scrollingDeltaY
+        let delta = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY / InterfaceStyle.rowHeight : event.scrollingDeltaY
         scrollRemainder -= delta
         let rows = Int(scrollRemainder.rounded(.towardZero))
         guard rows != 0 else { return }

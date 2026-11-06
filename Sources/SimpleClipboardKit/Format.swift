@@ -24,15 +24,11 @@ enum Format {
         return String(format: "%.1f %@", value, units[unit])
     }
 
-    /// Menu bar title: clip count, two spaces, age of the last copy. "0" when the history is empty. The age has
-    /// minute steps ("now" for the first minute), so the title changes at most about once a minute.
-    static func statusTitle(clipCount: Int, lastCopiedAt: Date?, now: Date, paused: Bool) -> String {
-        var title = "\(clipCount)"
-        if let lastCopiedAt {
-            title += "  " + (now.timeIntervalSince(lastCopiedAt) < 60 ? "now" : age(from: lastCopiedAt, to: now))
-        }
-        if paused { title += "  paused" }
-        return title
+    /// "Nov 6" in the user's locale.
+    static func shortDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.setLocalizedDateFormatFromTemplate("MMMd")
+        return formatter.string(from: date)
     }
 
     static func dateTime(_ date: Date) -> String {

@@ -5,7 +5,9 @@ import PackageDescription
 let harnesses: [(name: String, path: String, exclude: [String])] = [
     ("SettingsTests", "tools/settings-tests", []),
     ("StoreTests", "tools/store-tests", []),
-    ("PickerTests", "tools/picker-tests", [])
+    ("PickerTests", "tools/picker-tests", []),
+    ("FilterTests", "tools/filter-tests", []),
+    ("PanelTests", "tools/panel-tests", [])
 ]
 
 let package = Package(
