@@ -4,9 +4,12 @@
 
 - The app lives in the menu bar only (`LSUIElement`). Do not add a Dock icon, a main window, a toolbar or a sidebar.
 - Do not use `NSToolbar` or SwiftUI toolbars anywhere. Toolbar layout loops are the reason this app exists.
-- Settings live in the menu bar menu as submenus and are stored in user defaults. Do not add a settings file or a
+- Settings live in the settings panel that opens from the menu bar item, and are stored in user defaults. Use
+  checkboxes and choice rows (`PanelControls.swift`). Do not add menus, dropdowns, a settings file or a
   preferences window.
-- The menu shows statistics and settings, not clips. Clips are recalled from the picker.
+- The panel shows statistics and settings, not clips. Clips are recalled from the picker.
+- The picker has no title row and no input field. Typing narrows the list; the bottom bar shows the count and
+  the typed text.
 - The picker is a nonactivating `NSPanel`, so the user's app stays active and receives the paste. Do not activate
   the app when the picker opens.
 - The picker draws its own rows and prompt (like noteapp's `/import` popup) and maps keys in `PickerView.pickerKey`.
@@ -22,5 +25,5 @@
 ## Testing
 
 - Add each test harness to the `harnesses` list in `Package.swift`. `tools/run-tests.sh` runs them all.
-- Automated tests do not prove that live clipboard, menu or paste behavior works. State what still needs live
+- Automated tests do not prove that live clipboard, panel, picker or paste behavior works. State what still needs live
   validation.

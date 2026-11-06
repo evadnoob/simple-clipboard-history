@@ -240,6 +240,38 @@ if let visible = NSScreen.main?.visibleFrame {
     check(frame.midY >= visible.midY, "picker sits at or above the middle")
 }
 
+// MARK: resizing
+let dragFrame = NSRect(x: 100, y: 100, width: 600, height: 400)
+let limits = (minimum: NSSize(width: 420, height: 200), maximum: NSSize(width: 2000, height: 1000))
+check(WindowFrame.dragged(dragFrame, corner: .bottomRight, dx: 50, dy: -30, minimum: limits.minimum, maximum: limits.maximum)
+      == NSRect(x: 100, y: 70, width: 650, height: 430), "bottom-right drag keeps the top left")
+check(WindowFrame.dragged(dragFrame, corner: .topLeft, dx: -20, dy: 10, minimum: limits.minimum, maximum: limits.maximum)
+      == NSRect(x: 80, y: 100, width: 620, height: 410), "top-left drag keeps the bottom right")
+check(WindowFrame.dragged(dragFrame, corner: .bottomLeft, dx: 500, dy: 500, minimum: limits.minimum, maximum: limits.maximum)
+      == NSRect(x: 280, y: 300, width: 420, height: 200), "drag stops at the minimum size, opposite corner fixed")
+let resizedModel = PickerModel(search: search)
+let resizedView = PickerView(model: resizedModel)
+resizedModel.reset()
+resizedView.setFrameSize(NSSize(width: 640, height: 420))
+let rowsAtDefault = resizedModel.visibleRowCount
+resizedView.setFrameSize(NSSize(width: 640, height: 220))
+check(resizedModel.visibleRowCount < rowsAtDefault && resizedModel.visibleRowCount >= 3, "a smaller picker shows fewer rows")
+check(render(resizedView).pixelsWide > 0, "small picker draws")
+let sizeSuite = "simple-clipboard-picker-size-\(UUID().uuidString)"
+let sizeDefaults = UserDefaults(suiteName: sizeSuite)!
+let sizeStoreDirectory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("picker-size-\(UUID().uuidString)")
+let sizeStore = try! ClipStore(directory: sizeStoreDirectory)
+let sizeMonitor = ClipboardMonitor(pasteboard: NSPasteboard(name: NSPasteboard.Name("picker-size-\(UUID().uuidString)")),
+                                   store: sizeStore, settings: { Settings() })
+let sizeController = PickerController(store: sizeStore, settingsStore: SettingsStore(defaults: sizeDefaults), monitor: sizeMonitor,
+                                      defaults: sizeDefaults)
+check(sizeController.savedSize == InterfaceStyle.pickerSize, "default picker size")
+sizeController.saveSize(NSSize(width: 800, height: 600))
+check(sizeController.savedSize == NSSize(width: 800, height: 600), "picker size is remembered")
+sizeController.saveSize(NSSize(width: 10, height: 10))
+check(sizeController.savedSize == InterfaceStyle.pickerSize, "a size below the minimum falls back to the default")
+sizeDefaults.removePersistentDomain(forName: sizeSuite)
+
 // MARK: hotkey setting
 let suite = "simple-clipboard-picker-tests-\(UUID().uuidString)"
 let defaults = UserDefaults(suiteName: suite)!

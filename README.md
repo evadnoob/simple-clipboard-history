@@ -17,16 +17,23 @@ open SimpleClipboard.app
 
 ## Menu bar
 
-The title shows the clip count and the age of the last copy, for example `142  3m`. The menu does not list
-clips. It shows:
+The title shows the clip count and the age of the last copy, for example `142  3m`. Clicking it opens the
+settings panel under it. Clicking it again, Escape or a click elsewhere closes the panel.
 
-- Open Picker, with the picker hotkey.
+The panel has no menus or dropdowns. From the top:
+
 - Clipboard: the current clip's kind, size and source app, or why it was not recorded.
 - History: clip count, bytes copied, bytes on disk, the oldest clip and the last copy.
-- Notices: recall is set to paste and Accessibility permission is missing, or the picker hotkey could not be
-  registered.
-- Settings: Picker Hotkey, Recall, Keep History, Largest Clip, Ignored Apps, Pause Capture.
-- Clear History and Quit.
+- Checkboxes: Paste into the frontmost app, Always paste plain text, Pause capture.
+- Choice rows: Hotkey, Keep (clips), Largest clip (MB).
+- Ignored apps: a checkbox per ignored app (uncheck to record it again) and "+ Ignore <app>" for the app that was
+  in front when the panel opened.
+- Notices, when needed: missing Accessibility permission, or a hotkey that another app already uses. Clicking a
+  notice opens its fix.
+- Open Picker, Clear History and Quit.
+
+Every change applies at once. Clear History, and a Keep value smaller than the clip count, ask inside the panel
+before deleting. Tab moves between controls, Space toggles a checkbox and the arrow keys change a choice row.
 
 The source app of a clip is the frontmost app when the copy was seen. A copy made from a background process (for
 example `pbcopy` in a terminal) is attributed to whatever app was frontmost.
@@ -34,23 +41,43 @@ example `pbcopy` in a terminal) is attributed to whatever app was frontmost.
 ## Picker
 
 The hotkey (default Shift-Command-V) opens the picker over the current app. It is a borderless box in the style of
-noteapp's `/import` popup: a title row with the clip count, the clips newest first, and a search prompt at the
-bottom. Simple Clipboard does not become the active app, so the app you were in stays active and receives the
-paste.
+noteapp's `/import` popup: the clips newest first, and a bar at the bottom with the count and the key hints. There
+is no title row and no input field. Simple Clipboard does not become the active app, so the app you were in stays
+active and receives the paste.
 
-- Typing searches the text of every clip (substring, any case).
+- Typing narrows the list to clips whose text contains what you typed (any case). The match is shown in bold in
+  each row, and the bar shows the count and the typed text.
 - Up and Down (or Control-N and Control-P), Page Up, Page Down, Home and End move the selection. The scroll wheel
   scrolls.
-- Return, or a double-click, recalls the selected clip. Command-1 to Command-9 recall the numbered rows.
+- Return, or a double-click, pastes the selected clip. Command-1 to Command-9 paste the numbered rows.
+- Shift-Return pastes plain text (or, with "Always paste plain text" on, keeps the formatting).
+- Command-Return opens the filters for the selected clip. See Filters below.
 - Tab opens a preview of the selected clip (text, image or file paths). Escape closes the preview.
-- Backspace deletes a character, Option-Backspace a word, Command-Backspace or Control-U the whole query.
+- Backspace deletes a typed character, Option-Backspace a word, Command-Backspace or Control-U all of it.
 - Escape, Command-W, Control-G, the hotkey again or a click outside closes the picker.
+- The edges and corners resize the picker, with the same corner squares and diagonal cursors as noteapp. The size
+  is remembered.
 
-Recall puts the clip on the clipboard with every stored type. With Recall set to "Paste into Frontmost App", it
-also sends Command-V.
+Pasting puts the clip on the clipboard with every stored type, then sends Command-V (needs Accessibility
+permission). With "Paste into the frontmost app" off, the clip only goes on the clipboard.
 
-The search prompt reads key events directly. Input methods that compose characters (for example Japanese) do not
-work in it yet.
+Typing reads key events directly. Input methods that compose characters (for example Japanese) do not work yet.
+
+## Filters
+
+Filters change a clip's text before pasting, like Pastebot's. Command-Return in the picker lists them under three
+headings; typing narrows the list and Return pastes the result as plain text. Escape goes back to the clips.
+
+- Text & Writing: Convert to Plain Text, Single Line, Trim Whitespace, Normalize Whitespace, Convert to
+  Uppercase, Lowercase and Titlecase, Convert to Straight Punctuation, Sort Lines, Remove Duplicate Lines, Remove
+  List Numbering.
+- Developer: URL Encode and Decode, Base64 Encode and Decode, Hex Encode and Decode, HTML Entity Encode and
+  Decode, Escape for JSON String, Format JSON, Slugify, To snake_case, To camelCase.
+- Web & Markdown: Strip HTML, Markdown Link from URL, Markdown Blockquote, Extract URLs, Extract Email Addresses,
+  Create List, Wrap in Paragraph Tags.
+
+A filter that does not apply (for example Base64 Decode on text that is not Base64) beeps and leaves the picker
+open. Filter results are not saved as new clips; the original clip moves to the top.
 
 ## What is recorded
 
@@ -79,24 +106,23 @@ Measured on macOS 27.2 with 3 clips: 0.09% CPU over 120 seconds idle, 15 MB memo
 
 ## Settings
 
-All settings are in the menu. The app saves them in its preferences (`com.evadnoob.simple-clipboard`).
+All settings are in the settings panel. The app saves them in its preferences (`com.evadnoob.simple-clipboard`).
 
-- Picker Hotkey: Shift-Command-V (default), Option-Command-V, Control-Command-V, Shift-Option-Command-V or None.
-  If another app already uses the combination, the menu shows a notice; choose another one.
-- Recall: "Put on Clipboard" (you press Cmd-V) or "Paste into Frontmost App" (also sends Cmd-V; needs
-  Accessibility permission). Choosing paste without the permission opens the Accessibility settings. Until it is
-  granted, recalled clips go on the clipboard only.
-- Keep History: 100, 500, 1,000 (default), 5,000 or 10,000 clips. Choosing fewer clips than are stored asks before
-  deleting the least recently copied ones.
-- Largest Clip: 5, 20 (default), 50 or 100 MB. Larger copies are not recorded.
-- Ignored Apps: "Ignore <app>" adds the app that was in front when the menu opened. Choosing a listed app records
-  its copies again.
-- Pause Capture: stops recording until chosen again. The title shows `paused`.
+- Paste into the frontmost app (default on): sends Command-V after putting the clip on the clipboard. Needs
+  Accessibility permission. Turning it on without the permission shows the system prompt and opens the
+  Accessibility settings; until it is granted, clips go on the clipboard only.
+- Always paste plain text (default off).
+- Pause capture: stops recording until unchecked. The menu bar title shows `paused`.
+- Hotkey: Shift-Command-V (default), Option-Command-V, Control-Command-V, Shift-Option-Command-V or None.
+- Keep: 100, 500, 1,000 (default), 5,000 or 10,000 clips.
+- Largest clip: 5, 20 (default), 50 or 100 MB. Larger copies are not recorded.
+- Ignored apps.
 
 ## Milestones
 
 1. Risk check: clipboard polling, SQLite storage, both recall modes, and idle CPU and memory measurements.
 2. Capture and storage: history, duplicate removal, retention, concealed clips skipped, ignore list.
 3. Picker: a hotkey popup styled like noteapp's `/import` popup, with search at the bottom.
-4. More settings in the menu: hotkey, pinned clips.
+4. Settings panel, plain text and filter pastes, picker resizing. Next: pinned clips, deleting a clip from the
+   picker.
 5. Later: paste rules per app, paste filters, sequential paste.

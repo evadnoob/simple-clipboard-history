@@ -3,9 +3,10 @@ import AppKit
 /// A borderless panel that takes keys without activating Simple Clipboard, so the app the user was in stays the
 /// active app. That is where a pasted clip goes when the picker closes. The settings panel uses it too.
 final class FloatingPanel: NSPanel {
-    init(contentView: NSView, size: NSSize) {
+    init(contentView: NSView, size: NSSize, resizable: Bool = false) {
         super.init(contentRect: NSRect(origin: .zero, size: size),
-                   styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+                   styleMask: resizable ? [.borderless, .nonactivatingPanel, .resizable] : [.borderless, .nonactivatingPanel],
+                   backing: .buffered, defer: true)
         self.contentView = contentView
         isFloatingPanel = true
         level = .modalPanel
@@ -30,13 +31,50 @@ final class PickerController: NSObject, NSWindowDelegate {
     private let monitor: ClipboardMonitor
     let model: PickerModel
     let view: PickerView
+    /// Smallest picker size: a few rows and the bar.
+    static let minimumSize = NSSize(width: 420, height: 200)
+    private static let widthKey = "pickerWidth"
+    private static let heightKey = "pickerHeight"
+    private let defaults: UserDefaults
+
     private lazy var panel: FloatingPanel = {
-        let panel = FloatingPanel(contentView: view, size: InterfaceStyle.pickerSize)
+        // An unflipped container holds the picker and, above it, the four corner squares that resize the panel.
+        let container = NSView(frame: NSRect(origin: .zero, size: InterfaceStyle.pickerSize))
+        view.frame = container.bounds
+        view.autoresizingMask = [.width, .height]
+        container.addSubview(view)
+        for corner in [WindowCorner.bottomLeft, .bottomRight, .topLeft, .topRight] {
+            let cornerView = WindowCornerView(corner: corner)
+            cornerView.place(in: container)
+            cornerView.onResizeEnded = { [weak self] frame in self?.saveSize(frame.size) }
+            container.addSubview(cornerView)
+        }
+        let panel = FloatingPanel(contentView: container, size: InterfaceStyle.pickerSize, resizable: true)
+        panel.minSize = Self.minimumSize
         panel.delegate = self
         return panel
     }()
 
-    init(store: ClipStore, settingsStore: SettingsStore, monitor: ClipboardMonitor) {
+    /// The size the user last gave the picker, or the default.
+    var savedSize: NSSize {
+        let width = defaults.double(forKey: Self.widthKey)
+        let height = defaults.double(forKey: Self.heightKey)
+        guard width >= Self.minimumSize.width, height >= Self.minimumSize.height else { return InterfaceStyle.pickerSize }
+        return NSSize(width: width, height: height)
+    }
+
+    func saveSize(_ size: NSSize) {
+        defaults.set(Double(size.width), forKey: Self.widthKey)
+        defaults.set(Double(size.height), forKey: Self.heightKey)
+    }
+
+    /// Edge resizes go through the system; corner resizes report through `onResizeEnded`.
+    func windowDidEndLiveResize(_ notification: Notification) {
+        saveSize(panel.frame.size)
+    }
+
+    init(store: ClipStore, settingsStore: SettingsStore, monitor: ClipboardMonitor, defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         self.store = store
         self.settingsStore = settingsStore
         self.monitor = monitor
@@ -59,7 +97,7 @@ final class PickerController: NSObject, NSWindowDelegate {
         model.alwaysPastePlainText = settingsStore.settings.alwaysPastePlainText
         view.updateRowCount()
         view.needsDisplay = true
-        panel.setFrame(Self.frame(for: InterfaceStyle.pickerSize, on: Self.screenWithMouse()), display: true)
+        panel.setFrame(Self.frame(for: savedSize, on: Self.screenWithMouse()), display: true)
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(view)
     }

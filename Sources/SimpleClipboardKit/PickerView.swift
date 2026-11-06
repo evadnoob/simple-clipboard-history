@@ -39,6 +39,12 @@ final class PickerView: NSView {
         updateRowCount()
     }
 
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        updateRowCount()
+        needsDisplay = true
+    }
+
     // MARK: drawing
 
     override func draw(_ dirtyRect: NSRect) {
