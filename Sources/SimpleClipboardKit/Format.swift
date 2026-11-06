@@ -24,17 +24,15 @@ enum Format {
         return String(format: "%.1f %@", value, units[unit])
     }
 
-    /// Menu bar title: clip count, two spaces, age of the last copy. "0" when the history is empty.
+    /// Menu bar title: clip count, two spaces, age of the last copy. "0" when the history is empty. The age has
+    /// minute steps ("now" for the first minute), so the title changes at most about once a minute.
     static func statusTitle(clipCount: Int, lastCopiedAt: Date?, now: Date, paused: Bool) -> String {
         var title = "\(clipCount)"
-        if let lastCopiedAt { title += "  " + age(from: lastCopiedAt, to: now) }
+        if let lastCopiedAt {
+            title += "  " + (now.timeIntervalSince(lastCopiedAt) < 60 ? "now" : age(from: lastCopiedAt, to: now))
+        }
         if paused { title += "  paused" }
         return title
-    }
-
-    /// A menu row: the preview cut to `width` characters with an ellipsis.
-    static func menuPreview(_ text: String, width: Int = 50) -> String {
-        text.count <= width ? text : String(text.prefix(width - 1)) + "\u{2026}"
     }
 
     static func dateTime(_ date: Date) -> String {

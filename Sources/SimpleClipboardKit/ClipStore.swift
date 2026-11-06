@@ -146,6 +146,18 @@ final class ClipStore {
         try deleteLocked([id])
     }
 
+    /// Deletes every clip and blob file.
+    func deleteAll() throws {
+        lock.lock(); defer { lock.unlock() }
+        try database.transaction {
+            try database.run("DELETE FROM clips")
+            try database.run("DELETE FROM clip_search")
+        }
+        let files = (try? FileManager.default.contentsOfDirectory(at: blobDirectory, includingPropertiesForKeys: nil)) ?? []
+        for file in files { try? FileManager.default.removeItem(at: file) }
+        try database.execute("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")
+    }
+
     /// Deletes the least recently copied clips beyond `limit`. Returns how many were deleted.
     @discardableResult
     func enforceLimit(_ limit: Int) throws -> Int {

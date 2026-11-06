@@ -16,8 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuController: StatusMenuController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let settingsFile = SettingsFile(url: Settings.defaultURL())
-        settingsFile.reloadIfChanged()
+        let settingsStore = SettingsStore()
         let store: ClipStore
         do {
             store = try ClipStore(directory: ClipStore.defaultDirectory())
@@ -29,8 +28,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApplication.shared.terminate(nil)
             return
         }
-        let monitor = ClipboardMonitor(store: store, settings: { settingsFile.settings })
-        menuController = StatusMenuController(store: store, settingsFile: settingsFile, monitor: monitor)
+        let monitor = ClipboardMonitor(store: store, settings: { settingsStore.settings })
+        menuController = StatusMenuController(store: store, settingsStore: settingsStore, monitor: monitor)
         monitor.start()
         self.monitor = monitor
     }

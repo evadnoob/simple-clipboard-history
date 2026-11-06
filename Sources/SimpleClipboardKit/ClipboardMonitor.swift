@@ -25,7 +25,6 @@ final class ClipboardMonitor {
     /// The change count produced by our own recall write. That write is not recorded again.
     private var ownChangeCount: Int?
 
-    var paused = false
     private(set) var current: CurrentClipboard?
     /// Called on the main thread after each pasteboard change.
     var onChange: (() -> Void)?
@@ -65,10 +64,10 @@ final class ClipboardMonitor {
         if changeCount == ownChangeCount { return }
         let sourceApp = NSWorkspace.shared.frontmostApplication
         var state: CurrentClipboard.State
-        if paused {
+        let settings = settings()
+        if settings.capturePaused {
             state = .skipped(.paused)
         } else {
-            let settings = settings()
             switch Capture.read(pasteboard, sourceApp: sourceApp, settings: settings) {
             case .failure(let reason):
                 state = .skipped(reason)

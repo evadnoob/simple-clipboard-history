@@ -113,6 +113,18 @@ check(statistics.clipCount == 1 && statistics.latest?.id == firstID, "one clip l
 try! store.touch(firstID, at: start.addingTimeInterval(100))
 check(try! store.recent(limit: 1).first?.lastCopiedAt == start.addingTimeInterval(100), "touch moves the clip")
 
+// MARK: store: delete all
+let clearStore = freshStore()
+try! clearStore.record(textClip("keep me"))
+try! clearStore.record(largeClip)
+try! clearStore.deleteAll()
+check(try! clearStore.statistics().clipCount == 0, "delete all removes every clip")
+check(try! clearStore.search("keep", limit: 10).isEmpty, "delete all clears search")
+check((try! FileManager.default.contentsOfDirectory(atPath: clearStore.directory.appendingPathComponent("blobs").path)).isEmpty,
+      "delete all removes blob files")
+try! clearStore.record(textClip("after clear"))
+check(try! clearStore.recent(limit: 10).map(\.preview) == ["after clear"], "store works after delete all")
+
 // MARK: store reopens the same file
 let reopened = try! ClipStore(directory: store.directory)
 check(try! reopened.recent(limit: 10).map(\.id) == [firstID], "history survives reopening")
@@ -131,8 +143,7 @@ check(Format.bytes(20 * 1024 * 1024) == "20.0 MB", "megabytes")
 check(Format.statusTitle(clipCount: 0, lastCopiedAt: nil, now: now, paused: false) == "0", "empty title")
 check(Format.statusTitle(clipCount: 142, lastCopiedAt: now.addingTimeInterval(-180), now: now, paused: false) == "142  3m", "title")
 check(Format.statusTitle(clipCount: 1, lastCopiedAt: nil, now: now, paused: true) == "1  paused", "paused title")
-check(Format.menuPreview("abc", width: 5) == "abc", "short preview unchanged")
-check(Format.menuPreview("abcdefgh", width: 5) == "abcd\u{2026}", "long preview cut with an ellipsis")
+check(Format.statusTitle(clipCount: 2, lastCopiedAt: now.addingTimeInterval(-45), now: now, paused: false) == "2  now", "title age has minute steps")
 
 // MARK: monitor and recall on a private pasteboard (never the general pasteboard)
 let pasteboard = NSPasteboard(name: NSPasteboard.Name("simple-clipboard-tests-\(UUID().uuidString)"))
@@ -159,18 +170,21 @@ pasteboard.writeObjects([concealed])
 monitor.poll()
 check(monitor.current?.state == .skipped(.concealed), "concealed copy skipped")
 check(try! monitorStore.search("secret", limit: 10).isEmpty, "concealed text not stored")
-monitor.paused = true
+monitorSettings.capturePaused = true
 pasteboard.clearContents()
 pasteboard.setString("while paused", forType: .string)
 monitor.poll()
 check(monitor.current?.state == .skipped(.paused), "paused copy skipped")
-monitor.paused = false
-monitorSettings.maximumClipBytes = 4
+monitorSettings.capturePaused = false
+monitorSettings.maximumClipMegabytes = 1
 pasteboard.clearContents()
-pasteboard.setString("too large", forType: .string)
+pasteboard.setString(String(repeating: "x", count: 1024 * 1024 + 1), forType: .string)
 monitor.poll()
 if case .skipped(.tooLarge)? = monitor.current?.state { check(true, "") } else { check(false, "large copy skipped") }
-monitorSettings.maximumClipBytes = 1024
+pasteboard.clearContents()
+pasteboard.setString(String(repeating: "y", count: 1000), forType: .string)
+monitor.poll()
+if case .recorded? = monitor.current?.state { check(true, "") } else { check(false, "copy under the limit recorded") }
 monitorSettings.historyLimit = 2
 for text in ["one", "two", "three"] {
     pasteboard.clearContents()

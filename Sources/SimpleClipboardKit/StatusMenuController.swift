@@ -1,21 +1,20 @@
 import AppKit
 
 /// The menu bar item: a text title with the clip count and the age of the last copy, and a plain menu with
-/// clipboard statistics, recent clips and commands. The menu is rebuilt each time it opens.
+/// clipboard statistics and settings. Clips are not listed here. The menu is rebuilt each time it opens.
 final class StatusMenuController: NSObject, NSMenuDelegate {
-    static let recentClipCount = 10
-
     private let statusItem: NSStatusItem
     private let store: ClipStore
-    private let settingsFile: SettingsFile
+    private let settingsStore: SettingsStore
     private let monitor: ClipboardMonitor
     private var timer: Timer?
     private var statistics: StoreStatistics?
-    private var lastRecallOutcome: Recall.Outcome?
+    /// The app in front when the menu opened. The menu does not activate this app, so this is the user's app.
+    private var frontmostApp: NSRunningApplication?
 
-    init(store: ClipStore, settingsFile: SettingsFile, monitor: ClipboardMonitor) {
+    init(store: ClipStore, settingsStore: SettingsStore, monitor: ClipboardMonitor) {
         self.store = store
-        self.settingsFile = settingsFile
+        self.settingsStore = settingsStore
         self.monitor = monitor
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
@@ -25,12 +24,9 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         statusItem.menu = menu
         monitor.onChange = { [weak self] in self?.refreshStatistics() }
         refreshStatistics()
-        // Every 2 seconds: reload the settings file if it changed, and update the age in the title.
-        let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
-            self?.settingsFile.reloadIfChanged()
-            self?.updateTitle()
-        }
-        timer.tolerance = 1
+        // Every 30 seconds: update the age in the title, which changes in minute steps.
+        let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in self?.updateTitle() }
+        timer.tolerance = 5
         RunLoop.main.add(timer, forMode: .common)
         self.timer = timer
     }
@@ -43,7 +39,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private func updateTitle() {
         let title = Format.statusTitle(clipCount: statistics?.clipCount ?? 0,
                                        lastCopiedAt: statistics?.latest?.lastCopiedAt, now: Date(),
-                                       paused: monitor.paused)
+                                       paused: settingsStore.settings.capturePaused)
         guard statusItem.button?.title != title else { return }
         statusItem.button?.attributedTitle = NSAttributedString(string: title, attributes: [
             .font: NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular),
@@ -53,9 +49,10 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     // MARK: menu
 
     func menuNeedsUpdate(_ menu: NSMenu) {
+        frontmostApp = NSWorkspace.shared.frontmostApplication
         refreshStatistics()
         menu.removeAllItems()
-        let now = Date()
+        let settings = settingsStore.settings
 
         menu.addItem(header("Clipboard"))
         menu.addItem(info(currentClipboardLine()))
@@ -67,7 +64,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
                               + "\(Format.bytes(statistics.diskBytes)) on disk"))
             if let oldest = statistics.oldestCopiedAt { menu.addItem(info("Oldest clip: \(Format.dateTime(oldest))")) }
             if let latest = statistics.latest {
-                var line = "Last copy: \(Format.age(from: latest.lastCopiedAt, to: now)) ago"
+                var line = "Last copy: \(Format.age(from: latest.lastCopiedAt, to: Date())) ago"
                 if let app = latest.sourceAppName { line += " in \(app)" }
                 menu.addItem(info(line))
             }
@@ -75,37 +72,97 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             menu.addItem(info("History is not available"))
         }
 
-        let recent = (try? store.recent(limit: Self.recentClipCount)) ?? []
-        if !recent.isEmpty {
+        if settings.recallMode == .paste && !Recall.hasAccessibility {
             menu.addItem(.separator())
-            menu.addItem(header("Recent clips"))
-            for (index, clip) in recent.enumerated() {
-                let item = NSMenuItem(title: Format.menuPreview(clip.preview), action: #selector(recallClip(_:)),
-                                      keyEquivalent: index < 9 ? "\(index + 1)" : "")
-                item.target = self
-                item.representedObject = clip.id
-                item.toolTip = "\(clip.kind), \(Format.bytes(clip.byteSize)), copied \(clip.copyCount) times"
-                    + (clip.sourceAppName.map { ", last in \($0)" } ?? "")
-                menu.addItem(item)
-            }
-        }
-
-        let notices = noticeItems()
-        if !notices.isEmpty {
-            menu.addItem(.separator())
-            notices.forEach(menu.addItem)
+            let item = action("Paste needs Accessibility permission\u{2026}", #selector(openAccessibility))
+            item.toolTip = "Until Accessibility is granted, recalled clips go on the clipboard only."
+            menu.addItem(item)
         }
 
         menu.addItem(.separator())
-        let pause = NSMenuItem(title: "Pause Capture", action: #selector(togglePause), keyEquivalent: "")
-        pause.target = self
-        pause.state = monitor.paused ? .on : .off
+        menu.addItem(header("Settings"))
+        menu.addItem(submenu("Recall", recallMenu(settings)))
+        menu.addItem(submenu("Keep History", historyLimitMenu(settings)))
+        menu.addItem(submenu("Largest Clip", maximumClipMenu(settings)))
+        menu.addItem(submenu("Ignored Apps", ignoredAppsMenu(settings)))
+        let pause = action("Pause Capture", #selector(togglePause))
+        pause.state = settings.capturePaused ? .on : .off
         menu.addItem(pause)
-        let settings = NSMenuItem(title: "Open Settings File", action: #selector(openSettingsFile), keyEquivalent: ",")
-        settings.target = self
-        menu.addItem(settings)
+
+        menu.addItem(.separator())
+        menu.addItem(action("Clear History\u{2026}", #selector(clearHistory)))
         menu.addItem(NSMenuItem(title: "Quit Simple Clipboard", action: #selector(NSApplication.terminate(_:)),
                                 keyEquivalent: "q"))
+    }
+
+    private func recallMenu(_ settings: Settings) -> NSMenu {
+        let menu = NSMenu()
+        let choices: [(RecallMode, String)] = [(.clipboard, "Put on Clipboard"), (.paste, "Paste into Frontmost App")]
+        for (mode, title) in choices {
+            let item = action(title, #selector(chooseRecallMode(_:)))
+            item.representedObject = mode.rawValue
+            item.state = settings.recallMode == mode ? .on : .off
+            menu.addItem(item)
+        }
+        return menu
+    }
+
+    private func historyLimitMenu(_ settings: Settings) -> NSMenu {
+        let menu = NSMenu()
+        var choices = Settings.historyLimitChoices
+        if !choices.contains(settings.historyLimit) { choices = (choices + [settings.historyLimit]).sorted() }
+        for limit in choices {
+            let item = action("\(limit.formatted()) clips", #selector(chooseHistoryLimit(_:)))
+            item.representedObject = limit
+            item.state = settings.historyLimit == limit ? .on : .off
+            menu.addItem(item)
+        }
+        return menu
+    }
+
+    private func maximumClipMenu(_ settings: Settings) -> NSMenu {
+        let menu = NSMenu()
+        var choices = Settings.maximumClipMegabyteChoices
+        if !choices.contains(settings.maximumClipMegabytes) {
+            choices = (choices + [settings.maximumClipMegabytes]).sorted()
+        }
+        for megabytes in choices {
+            let item = action("\(megabytes) MB", #selector(chooseMaximumClip(_:)))
+            item.representedObject = megabytes
+            item.state = settings.maximumClipMegabytes == megabytes ? .on : .off
+            menu.addItem(item)
+        }
+        return menu
+    }
+
+    private func ignoredAppsMenu(_ settings: Settings) -> NSMenu {
+        let menu = NSMenu()
+        if let app = frontmostApp, let identifier = app.bundleIdentifier,
+           identifier != Bundle.main.bundleIdentifier, !settings.ignoredApps.contains(identifier) {
+            let item = action("Ignore \(app.localizedName ?? identifier)", #selector(ignoreApp(_:)))
+            item.representedObject = identifier
+            menu.addItem(item)
+            menu.addItem(.separator())
+        }
+        if settings.ignoredApps.isEmpty {
+            menu.addItem(info("No ignored apps"))
+        } else {
+            for identifier in settings.ignoredApps {
+                let item = action(Self.appName(identifier), #selector(stopIgnoringApp(_:)))
+                item.representedObject = identifier
+                item.state = .on
+                item.toolTip = "\(identifier). Choose to record copies from this app again."
+                menu.addItem(item)
+            }
+        }
+        return menu
+    }
+
+    static func appName(_ bundleIdentifier: String) -> String {
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) else {
+            return bundleIdentifier
+        }
+        return FileManager.default.displayName(atPath: url.path).replacingOccurrences(of: ".app", with: "")
     }
 
     private func currentClipboardLine() -> String {
@@ -124,28 +181,11 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     static func describe(_ reason: SkipReason) -> String {
         switch reason {
         case .concealed: return "marked concealed"
-        case .ignoredApp(let identifier): return "\(identifier) is ignored"
+        case .ignoredApp(let identifier): return "\(appName(identifier)) is ignored"
         case .tooLarge(let bytes): return "larger than the limit (\(Format.bytes(bytes)) read)"
         case .empty: return "empty"
         case .paused: return "capture paused"
         }
-    }
-
-    private func noticeItems() -> [NSMenuItem] {
-        var items: [NSMenuItem] = []
-        if settingsFile.settings.recallMode == .paste && !Recall.hasAccessibility {
-            let item = NSMenuItem(title: "Paste needs Accessibility permission\u{2026}",
-                                  action: #selector(openAccessibility), keyEquivalent: "")
-            item.target = self
-            item.toolTip = "Recall mode is \"paste\". Until Accessibility is granted, clips go on the clipboard only."
-            items.append(item)
-        }
-        for problem in settingsFile.problems {
-            let item = NSMenuItem(title: "Settings: \(problem)", action: #selector(openSettingsFile), keyEquivalent: "")
-            item.target = self
-            items.append(item)
-        }
-        return items
     }
 
     private func header(_ title: String) -> NSMenuItem {
@@ -164,37 +204,79 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         return item
     }
 
+    private func action(_ title: String, _ selector: Selector) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
+        item.target = self
+        return item
+    }
+
+    private func submenu(_ title: String, _ menu: NSMenu) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        menu.autoenablesItems = false
+        item.submenu = menu
+        return item
+    }
+
     // MARK: actions
 
-    @objc private func recallClip(_ sender: NSMenuItem) {
-        guard let id = sender.representedObject as? Int64,
-              let items = try? store.items(for: id), !items.isEmpty else { NSSound.beep(); return }
-        lastRecallOutcome = Recall.perform(items: items, mode: settingsFile.settings.recallMode)
-        try? store.touch(id)
-        if let clip = try? store.recent(limit: 1).first { monitor.noteOwnWrite(clip: clip) }
+    @objc private func chooseRecallMode(_ sender: NSMenuItem) {
+        guard let text = sender.representedObject as? String, let mode = RecallMode(rawValue: text) else { return }
+        settingsStore.update { $0.recallMode = mode }
+        if mode == .paste && !Recall.hasAccessibility { Recall.openAccessibilitySettings() }
+    }
+
+    @objc private func chooseHistoryLimit(_ sender: NSMenuItem) {
+        guard let limit = sender.representedObject as? Int else { return }
+        let deleting = max(0, (statistics?.clipCount ?? 0) - limit)
+        if deleting > 0 && !confirm("Keep \(limit.formatted()) clips?",
+                                    "The \(deleting.formatted()) least recently copied clips will be deleted.",
+                                    button: "Delete \(deleting.formatted()) Clips") {
+            return
+        }
+        settingsStore.update { $0.historyLimit = limit }
+        _ = try? store.enforceLimit(limit)
+        refreshStatistics()
+    }
+
+    @objc private func chooseMaximumClip(_ sender: NSMenuItem) {
+        guard let megabytes = sender.representedObject as? Int else { return }
+        settingsStore.update { $0.maximumClipMegabytes = megabytes }
+    }
+
+    @objc private func ignoreApp(_ sender: NSMenuItem) {
+        guard let identifier = sender.representedObject as? String else { return }
+        settingsStore.ignore(identifier)
+    }
+
+    @objc private func stopIgnoringApp(_ sender: NSMenuItem) {
+        guard let identifier = sender.representedObject as? String else { return }
+        settingsStore.stopIgnoring(identifier)
     }
 
     @objc private func togglePause() {
-        monitor.paused.toggle()
+        settingsStore.update { $0.capturePaused.toggle() }
         updateTitle()
     }
 
-    @objc private func openSettingsFile() {
-        do {
-            try settingsFile.createIfMissing()
-        } catch {
-            NSSound.beep()
-            return
-        }
-        let url = settingsFile.url
-        if NSWorkspace.shared.urlForApplication(toOpen: url) != nil {
-            NSWorkspace.shared.open(url)
-        } else if let textEdit = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.TextEdit") {
-            NSWorkspace.shared.open([url], withApplicationAt: textEdit, configuration: NSWorkspace.OpenConfiguration())
-        }
+    @objc private func clearHistory() {
+        let count = statistics?.clipCount ?? 0
+        guard confirm("Clear the clipboard history?", "All \(count.formatted()) clips will be deleted.",
+                      button: "Delete All Clips") else { return }
+        try? store.deleteAll()
+        refreshStatistics()
     }
 
     @objc private func openAccessibility() {
         Recall.openAccessibilitySettings()
+    }
+
+    private func confirm(_ message: String, _ detail: String, button: String) -> Bool {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.informativeText = detail
+        alert.addButton(withTitle: button)
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 }

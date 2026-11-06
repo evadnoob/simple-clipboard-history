@@ -17,13 +17,14 @@ open SimpleClipboard.app
 
 ## Menu bar
 
-The title shows the clip count and the age of the last copy, for example `142  3m`. The menu shows:
+The title shows the clip count and the age of the last copy, for example `142  3m`. The menu does not list
+clips. It shows:
 
 - Clipboard: the current clip's kind, size and source app, or why it was not recorded.
 - History: clip count, bytes copied, bytes on disk, the oldest clip and the last copy.
-- Recent clips: the 10 most recently copied clips. Cmd-1 to Cmd-9 recall the first nine while the menu is open.
-- Notices: a missing Accessibility permission and settings file problems.
-- Pause Capture, Open Settings File, Quit.
+- A notice when recall is set to paste and Accessibility permission is missing.
+- Settings: Recall, Keep History, Largest Clip, Ignored Apps, Pause Capture.
+- Clear History and Quit.
 
 The source app of a clip is the frontmost app when the copy was seen. A copy made from a background process (for
 example `pbcopy` in a terminal) is attributed to whatever app was frontmost.
@@ -35,8 +36,8 @@ Every pasteboard item and type is stored, so rich text, images and files paste b
 when:
 
 - it carries an nspasteboard.org marker such as `org.nspasteboard.ConcealedType` (password managers set these),
-- it was made in an app listed under `capture ignore-app`,
-- it is larger than `history maximum-clip-megabytes`,
+- it was made in an app in Ignored Apps,
+- it is larger than the Largest Clip setting,
 - capture is paused.
 
 Copying the same content again moves the existing clip to the top instead of storing it twice.
@@ -49,38 +50,30 @@ Copying the same content again moves the existing clip to the top instead of sto
   memory-mapped reads, so pages live in the OS file cache instead of the app's heap.
 - `blobs/`: representations larger than 128 KB, one file per distinct content (named by SHA-256).
 
-The least recently copied clips beyond `history limit` are deleted, with their unused blob files.
+The least recently copied clips beyond the Keep History setting are deleted, with their unused blob files.
 
 Measured on macOS 27.2 with 3 clips: 0.09% CPU over 120 seconds idle, 15 MB memory footprint (`footprint`).
 
 ## Settings
 
-`~/.config/simple-clipboard/simple-clipboard.kdl` (override with `SIMPLE_CLIPBOARD_SETTINGS`). Open Settings File
-creates it from a commented template. Changes apply within 2 seconds of saving. Invalid values keep their
-defaults and show as notices in the menu.
+All settings are in the menu. The app saves them in its preferences (`com.evadnoob.simple-clipboard`).
 
-```kdl
-recall {
-    # "clipboard": choosing a clip puts it on the clipboard; you press Cmd-V.
-    # "paste": also sends Cmd-V to the frontmost app. Needs Accessibility permission.
-    mode "clipboard"
-}
-history {
-    limit 1000
-    maximum-clip-megabytes 20
-}
-capture {
-    ignore-app "com.1password.1password"
-}
-```
+- Recall: "Put on Clipboard" (you press Cmd-V) or "Paste into Frontmost App" (also sends Cmd-V; needs
+  Accessibility permission). Choosing paste without the permission opens the Accessibility settings. Until it is
+  granted, recalled clips go on the clipboard only.
+- Keep History: 100, 500, 1,000 (default), 5,000 or 10,000 clips. Choosing fewer clips than are stored asks before
+  deleting the least recently copied ones.
+- Largest Clip: 5, 20 (default), 50 or 100 MB. Larger copies are not recorded.
+- Ignored Apps: "Ignore <app>" adds the app that was in front when the menu opened. Choosing a listed app records
+  its copies again.
+- Pause Capture: stops recording until chosen again. The title shows `paused`.
 
-With `mode "paste"` and no Accessibility permission, the clip still goes on the clipboard and the menu shows a
-notice that opens the Accessibility settings.
+Recall itself comes with the picker (milestone 3).
 
 ## Milestones
 
 1. Risk check: clipboard polling, SQLite storage, both recall modes, and idle CPU and memory measurements.
 2. Capture and storage: history, duplicate removal, retention, concealed clips skipped, ignore list.
 3. Picker: a hotkey popup styled like noteapp's `/import` popup, with search at the bottom.
-4. Settings: hotkey, retention, ignore list, menu bar title, pinned clips.
+4. More settings in the menu: hotkey, pinned clips.
 5. Later: paste rules per app, paste filters, sequential paste.

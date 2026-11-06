@@ -1,4 +1,4 @@
-// Settings file checks. Run: bash tools/run-tests.sh
+// Settings storage checks. Run: bash tools/run-tests.sh
 import Foundation
 @testable import SimpleClipboardKit
 
@@ -9,78 +9,56 @@ func check(_ condition: @autoclosure () -> Bool, _ label: String) {
     if !condition() { failures += 1; print("FAIL: \(label)") }
 }
 
-// MARK: KDL copy from noteapp parses
-let nodes = try? KDL.parse("recall { mode \"clipboard\" }")
-check(nodes?.first?.name == "recall", "KDL parses a node")
-check(nodes?.first?.children.first?.arguments.first == .string("clipboard"), "KDL parses a child argument")
+func freshDefaults() -> UserDefaults {
+    let name = "simple-clipboard-tests-\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: name)!
+    defaults.removePersistentDomain(forName: name)
+    return defaults
+}
 
 // MARK: defaults
-let empty = Settings.parse("")
-check(empty.settings == Settings.defaults, "empty file gives defaults")
-check(empty.problems.isEmpty, "empty file has no problems")
+let defaults = freshDefaults()
+let store = SettingsStore(defaults: defaults)
+check(store.settings == Settings.defaults, "nothing stored gives defaults")
 check(Settings.defaults.recallMode == .clipboard, "default recall mode is clipboard")
+check(Settings.defaults.historyLimit == 1000, "default history limit")
+check(Settings.defaults.maximumClipBytes == 20 * 1024 * 1024, "default largest clip")
+check(!Settings.defaults.capturePaused, "capture runs by default")
+check(Settings.historyLimitChoices.contains(Settings.defaults.historyLimit), "default limit is a menu choice")
+check(Settings.maximumClipMegabyteChoices.contains(Settings.defaults.maximumClipMegabytes), "default size is a menu choice")
 
-// MARK: the template is valid and matches the defaults
-let template = Settings.parse(Settings.template)
-check(template.problems.isEmpty, "template has no problems: \(template.problems)")
-check(template.settings == Settings.defaults, "template values equal the defaults")
+// MARK: updates persist and notify
+var notified: [Settings] = []
+store.onChange = { notified.append($0) }
+store.update {
+    $0.recallMode = .paste
+    $0.historyLimit = 500
+    $0.maximumClipMegabytes = 50
+    $0.capturePaused = true
+}
+check(notified.count == 1, "one notification per update")
+store.update { $0.historyLimit = 500 }
+check(notified.count == 1, "no notification when nothing changed")
+store.ignore("com.1password.1password")
+store.ignore("com.apple.keychainaccess")
+store.ignore("com.1password.1password")
+check(store.settings.ignoredApps == ["com.1password.1password", "com.apple.keychainaccess"], "ignore keeps order, no duplicates")
+let reloaded = SettingsStore(defaults: defaults).settings
+check(reloaded.recallMode == .paste, "recall mode persists")
+check(reloaded.historyLimit == 500, "history limit persists")
+check(reloaded.maximumClipMegabytes == 50 && reloaded.maximumClipBytes == 50 * 1024 * 1024, "largest clip persists")
+check(reloaded.capturePaused, "pause persists")
+check(reloaded.ignoredApps == ["com.1password.1password", "com.apple.keychainaccess"], "ignored apps persist")
+store.stopIgnoring("com.1password.1password")
+check(SettingsStore(defaults: defaults).settings.ignoredApps == ["com.apple.keychainaccess"], "stop ignoring persists")
 
-// MARK: values
-let full = Settings.parse("""
-    recall { mode "paste" }
-    history {
-        limit 50
-        maximum-clip-megabytes 2
-    }
-    capture {
-        ignore-app "com.1password.1password"
-        ignore-app "com.apple.keychainaccess"
-    }
-    """)
-check(full.problems.isEmpty, "valid file has no problems: \(full.problems)")
-check(full.settings.recallMode == .paste, "recall mode paste")
-check(full.settings.historyLimit == 50, "history limit")
-check(full.settings.maximumClipBytes == 2 * 1024 * 1024, "maximum clip size in megabytes")
-check(full.settings.ignoredApps == ["com.1password.1password", "com.apple.keychainaccess"], "ignored apps in order")
-
-// MARK: invalid values keep the defaults and report a problem with the line
-let invalid = Settings.parse("""
-    recall { mode "type" }
-    history { limit 0; maximum-clip-megabytes 1.5 }
-    capture { ignore-app 3 }
-    colors { }
-    """)
-check(invalid.settings == Settings.defaults, "invalid values keep defaults")
-check(invalid.problems.count == 5, "one problem per invalid value: \(invalid.problems)")
-check(invalid.problems.first == "line 1: recall mode must be \"clipboard\" or \"paste\"", "problem names the line and allowed values")
-
-let broken = Settings.parse("recall { mode \"paste\" ")
-check(broken.settings == Settings.defaults, "unparseable file gives defaults")
-check(broken.problems.count == 1 && broken.problems[0].hasPrefix("settings file:"), "unparseable file reports one problem")
-
-// MARK: SettingsFile reloads only when the file changes
-let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("settings-\(UUID().uuidString)")
-let url = directory.appendingPathComponent("simple-clipboard.kdl")
-let file = SettingsFile(url: url)
-check(file.reloadIfChanged(), "first load reports a change")
-check(file.settings == Settings.defaults, "missing file gives defaults")
-check(!file.reloadIfChanged(), "missing file again is not a change")
-try! file.createIfMissing()
-check(FileManager.default.fileExists(atPath: url.path), "createIfMissing writes the template")
-check(file.reloadIfChanged(), "new file is a change")
-check(file.problems.isEmpty, "template loads without problems")
-try! "recall { mode \"paste\" }".write(to: url, atomically: true, encoding: .utf8)
-try! FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(10)], ofItemAtPath: url.path)
-check(file.reloadIfChanged(), "edited file is a change")
-check(file.settings.recallMode == .paste, "edited value applies")
-try! "recall { mode \"clipboard\" }".write(to: url, atomically: true, encoding: .utf8)
-try! FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(20)], ofItemAtPath: url.path)
-try! file.createIfMissing()
-check(file.reloadIfChanged() && file.settings.recallMode == .clipboard, "createIfMissing does not overwrite")
-
-// MARK: paths
-check(Settings.defaultURL(environment: ["SIMPLE_CLIPBOARD_SETTINGS": "/tmp/x.kdl"]).path == "/tmp/x.kdl", "environment overrides settings path")
-check(Settings.defaultURL(environment: [:]).path.hasSuffix(".config/simple-clipboard/simple-clipboard.kdl"), "default settings path")
+// MARK: invalid stored values read as defaults
+let broken = freshDefaults()
+broken.set("type", forKey: "recallMode")
+broken.set(0, forKey: "historyLimit")
+broken.set(-3, forKey: "maximumClipMegabytes")
+broken.set("not a list", forKey: "ignoredApps")
+check(SettingsStore(defaults: broken).settings == Settings.defaults, "invalid stored values give defaults")
 
 print("\(checks) checks, \(failures) failed")
 exit(failures == 0 ? 0 : 1)
