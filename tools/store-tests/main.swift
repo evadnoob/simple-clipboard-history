@@ -140,10 +140,6 @@ check(Format.age(from: now.addingTimeInterval(60), to: now) == "now", "future da
 check(Format.bytes(512) == "512 B", "bytes")
 check(Format.bytes(1536) == "1.5 KB", "kilobytes")
 check(Format.bytes(20 * 1024 * 1024) == "20.0 MB", "megabytes")
-check(Format.statusTitle(clipCount: 0, lastCopiedAt: nil, now: now, paused: false) == "0", "empty title")
-check(Format.statusTitle(clipCount: 142, lastCopiedAt: now.addingTimeInterval(-180), now: now, paused: false) == "142  3m", "title")
-check(Format.statusTitle(clipCount: 1, lastCopiedAt: nil, now: now, paused: true) == "1  paused", "paused title")
-check(Format.statusTitle(clipCount: 2, lastCopiedAt: now.addingTimeInterval(-45), now: now, paused: false) == "2  now", "title age has minute steps")
 
 // MARK: monitor and recall on a private pasteboard (never the general pasteboard)
 let pasteboard = NSPasteboard(name: NSPasteboard.Name("simple-clipboard-tests-\(UUID().uuidString)"))

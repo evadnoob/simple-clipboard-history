@@ -17,8 +17,8 @@ open SimpleClipboard.app
 
 ## Menu bar
 
-The title shows the clip count and the age of the last copy, for example `142  3m`. Clicking it opens the
-settings panel under it. Clicking it again, Escape or a click elsewhere closes the panel.
+The menu bar item is a clipboard icon (the `list.clipboard` symbol), dimmed while capture is paused. Clicking it
+opens the settings panel under it. Clicking it again, Escape or a click elsewhere closes the panel.
 
 The panel has no menus or dropdowns. From the top:
 
@@ -112,7 +112,7 @@ All settings are in the settings panel. The app saves them in its preferences (`
   Accessibility permission. Turning it on without the permission shows the system prompt and opens the
   Accessibility settings; until it is granted, clips go on the clipboard only.
 - Always paste plain text (default off).
-- Pause capture: stops recording until unchecked. The menu bar title shows `paused`.
+- Pause capture: stops recording until unchecked. The menu bar icon is dimmed.
 - Hotkey: Shift-Command-V (default), Option-Command-V, Control-Command-V, Shift-Option-Command-V or None.
 - Keep: 100, 500, 1,000 (default), 5,000 or 10,000 clips.
 - Largest clip: 5, 20 (default), 50 or 100 MB. Larger copies are not recorded.

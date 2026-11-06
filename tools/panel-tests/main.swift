@@ -167,6 +167,9 @@ let detail = "last copy 59m ago in Visual Studio Code"
 let labelWidth = InterfaceStyle.width(of: "Largest clip") + InterfaceStyle.gap * 2
 check(InterfaceStyle.width(of: detail) <= SettingsPanelView.width - labelWidth - InterfaceStyle.gap * 2, "history detail fits")
 
+// MARK: menu bar icon
+check(StatusItemController.icon.isTemplate && StatusItemController.icon.size.width > 0, "menu bar icon is a template image")
+
 // MARK: snapshots for a visual check (only with PANEL_SNAPSHOT_DIRECTORY set)
 if let directory = ProcessInfo.processInfo.environment["PANEL_SNAPSHOT_DIRECTORY"] {
     for appearanceName in [NSAppearance.Name.aqua, .darkAqua] {

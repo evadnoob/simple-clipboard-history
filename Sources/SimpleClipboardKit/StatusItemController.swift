@@ -1,7 +1,7 @@
 import AppKit
 
-/// The menu bar item: a text title with the clip count and the age of the last copy. Clicking it opens the
-/// settings panel under it; clicking it again, pressing Esc or clicking elsewhere closes the panel.
+/// The menu bar item: a clipboard icon, dimmed while capture is paused. Clicking it opens the settings panel
+/// under it; clicking it again, pressing Esc or clicking elsewhere closes the panel.
 final class StatusItemController: NSObject, NSWindowDelegate {
     private let statusItem: NSStatusItem
     private let store: ClipStore
@@ -9,7 +9,6 @@ final class StatusItemController: NSObject, NSWindowDelegate {
     private let monitor: ClipboardMonitor
     private let picker: PickerController
     private let hotkey: GlobalHotkey
-    private var timer: Timer?
     private var statistics: StoreStatistics?
     let panelView = SettingsPanelView()
     private lazy var panel: FloatingPanel = {
@@ -36,30 +35,34 @@ final class StatusItemController: NSObject, NSWindowDelegate {
         statusItem.button?.target = self
         statusItem.button?.action = #selector(togglePanel)
         statusItem.button?.sendAction(on: [.leftMouseDown, .rightMouseDown])
+        statusItem.button?.image = Self.icon
+        statusItem.button?.toolTip = "Simple Clipboard"
         panelView.actions = makeActions()
         monitor.onChange = { [weak self] in self?.refresh() }
         refresh()
-        // Every 30 seconds: update the age in the title, which changes in minute steps.
-        let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in self?.updateTitle() }
-        timer.tolerance = 5
-        RunLoop.main.add(timer, forMode: .common)
-        self.timer = timer
     }
+
+    /// A template image, so macOS colors it for the menu bar in light and dark mode.
+    static let icon: NSImage = {
+        let image = NSImage(systemSymbolName: "list.clipboard", accessibilityDescription: "Simple Clipboard")
+            ?? NSImage(size: NSSize(width: 16, height: 16))
+        image.isTemplate = true
+        return image
+    }()
+
+    /// True when the icon is dimmed, for tests.
+    var iconDimmed: Bool { statusItem.button?.appearsDisabled ?? false }
 
     private func refresh() {
         statistics = try? store.statistics()
-        updateTitle()
+        updateIcon()
         if panel.isVisible { showContent() }
     }
 
-    private func updateTitle() {
-        let title = Format.statusTitle(clipCount: statistics?.clipCount ?? 0,
-                                       lastCopiedAt: statistics?.latest?.lastCopiedAt, now: Date(),
-                                       paused: settingsStore.settings.capturePaused)
-        guard statusItem.button?.title != title else { return }
-        statusItem.button?.attributedTitle = NSAttributedString(string: title, attributes: [
-            .font: NSFont.monospacedDigitSystemFont(ofSize: NSFont.systemFontSize, weight: .regular),
-        ])
+    private func updateIcon() {
+        let paused = settingsStore.settings.capturePaused
+        statusItem.button?.appearsDisabled = paused
+        statusItem.button?.toolTip = paused ? "Simple Clipboard (capture paused)" : "Simple Clipboard"
     }
 
     // MARK: panel
