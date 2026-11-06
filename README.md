@@ -20,14 +20,37 @@ open SimpleClipboard.app
 The title shows the clip count and the age of the last copy, for example `142  3m`. The menu does not list
 clips. It shows:
 
+- Open Picker, with the picker hotkey.
 - Clipboard: the current clip's kind, size and source app, or why it was not recorded.
 - History: clip count, bytes copied, bytes on disk, the oldest clip and the last copy.
-- A notice when recall is set to paste and Accessibility permission is missing.
-- Settings: Recall, Keep History, Largest Clip, Ignored Apps, Pause Capture.
+- Notices: recall is set to paste and Accessibility permission is missing, or the picker hotkey could not be
+  registered.
+- Settings: Picker Hotkey, Recall, Keep History, Largest Clip, Ignored Apps, Pause Capture.
 - Clear History and Quit.
 
 The source app of a clip is the frontmost app when the copy was seen. A copy made from a background process (for
 example `pbcopy` in a terminal) is attributed to whatever app was frontmost.
+
+## Picker
+
+The hotkey (default Shift-Command-V) opens the picker over the current app. It is a borderless box in the style of
+noteapp's `/import` popup: a title row with the clip count, the clips newest first, and a search prompt at the
+bottom. Simple Clipboard does not become the active app, so the app you were in stays active and receives the
+paste.
+
+- Typing searches the text of every clip (substring, any case).
+- Up and Down (or Control-N and Control-P), Page Up, Page Down, Home and End move the selection. The scroll wheel
+  scrolls.
+- Return, or a double-click, recalls the selected clip. Command-1 to Command-9 recall the numbered rows.
+- Tab opens a preview of the selected clip (text, image or file paths). Escape closes the preview.
+- Backspace deletes a character, Option-Backspace a word, Command-Backspace or Control-U the whole query.
+- Escape, Command-W, Control-G, the hotkey again or a click outside closes the picker.
+
+Recall puts the clip on the clipboard with every stored type. With Recall set to "Paste into Frontmost App", it
+also sends Command-V.
+
+The search prompt reads key events directly. Input methods that compose characters (for example Japanese) do not
+work in it yet.
 
 ## What is recorded
 
@@ -58,6 +81,8 @@ Measured on macOS 27.2 with 3 clips: 0.09% CPU over 120 seconds idle, 15 MB memo
 
 All settings are in the menu. The app saves them in its preferences (`com.evadnoob.simple-clipboard`).
 
+- Picker Hotkey: Shift-Command-V (default), Option-Command-V, Control-Command-V, Shift-Option-Command-V or None.
+  If another app already uses the combination, the menu shows a notice; choose another one.
 - Recall: "Put on Clipboard" (you press Cmd-V) or "Paste into Frontmost App" (also sends Cmd-V; needs
   Accessibility permission). Choosing paste without the permission opens the Accessibility settings. Until it is
   granted, recalled clips go on the clipboard only.
@@ -67,8 +92,6 @@ All settings are in the menu. The app saves them in its preferences (`com.evadno
 - Ignored Apps: "Ignore <app>" adds the app that was in front when the menu opened. Choosing a listed app records
   its copies again.
 - Pause Capture: stops recording until chosen again. The title shows `paused`.
-
-Recall itself comes with the picker (milestone 3).
 
 ## Milestones
 

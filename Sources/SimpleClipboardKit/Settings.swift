@@ -18,6 +18,7 @@ struct Settings: Equatable {
     /// Bundle identifiers of apps whose copies are not recorded.
     var ignoredApps: [String] = []
     var capturePaused = false
+    var pickerHotkey = HotkeyChoice.defaultChoice
 
     var maximumClipBytes: Int { maximumClipMegabytes * 1024 * 1024 }
 
@@ -35,6 +36,7 @@ final class SettingsStore {
         static let maximumClipMegabytes = "maximumClipMegabytes"
         static let ignoredApps = "ignoredApps"
         static let capturePaused = "capturePaused"
+        static let pickerHotkey = "pickerHotkey"
     }
 
     private let defaults: UserDefaults
@@ -62,6 +64,9 @@ final class SettingsStore {
             settings.ignoredApps = apps.filter { !$0.isEmpty }
         }
         settings.capturePaused = defaults.bool(forKey: Key.capturePaused)
+        if let text = defaults.string(forKey: Key.pickerHotkey), let choice = HotkeyChoice(rawValue: text) {
+            settings.pickerHotkey = choice
+        }
         return settings
     }
 
@@ -75,6 +80,7 @@ final class SettingsStore {
         defaults.set(updated.maximumClipMegabytes, forKey: Key.maximumClipMegabytes)
         defaults.set(updated.ignoredApps, forKey: Key.ignoredApps)
         defaults.set(updated.capturePaused, forKey: Key.capturePaused)
+        defaults.set(updated.pickerHotkey.rawValue, forKey: Key.pickerHotkey)
         onChange?(updated)
     }
 

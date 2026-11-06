@@ -4,7 +4,8 @@ import PackageDescription
 /// Test harness targets. tools/run-tests.sh runs every name in this list, so add new harnesses here.
 let harnesses: [(name: String, path: String, exclude: [String])] = [
     ("SettingsTests", "tools/settings-tests", []),
-    ("StoreTests", "tools/store-tests", [])
+    ("StoreTests", "tools/store-tests", []),
+    ("PickerTests", "tools/picker-tests", [])
 ]
 
 let package = Package(

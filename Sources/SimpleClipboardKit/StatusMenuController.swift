@@ -7,15 +7,20 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private let store: ClipStore
     private let settingsStore: SettingsStore
     private let monitor: ClipboardMonitor
+    private let picker: PickerController
+    private let hotkey: GlobalHotkey
     private var timer: Timer?
     private var statistics: StoreStatistics?
     /// The app in front when the menu opened. The menu does not activate this app, so this is the user's app.
     private var frontmostApp: NSRunningApplication?
 
-    init(store: ClipStore, settingsStore: SettingsStore, monitor: ClipboardMonitor) {
+    init(store: ClipStore, settingsStore: SettingsStore, monitor: ClipboardMonitor, picker: PickerController,
+         hotkey: GlobalHotkey) {
         self.store = store
         self.settingsStore = settingsStore
         self.monitor = monitor
+        self.picker = picker
+        self.hotkey = hotkey
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
         let menu = NSMenu()
@@ -54,6 +59,14 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         menu.removeAllItems()
         let settings = settingsStore.settings
 
+        let open = action("Open Picker", #selector(openPicker))
+        if case .registered(let choice) = hotkey.status {
+            open.keyEquivalent = "v"
+            open.keyEquivalentModifierMask = choice.menuModifiers
+        }
+        menu.addItem(open)
+        menu.addItem(.separator())
+
         menu.addItem(header("Clipboard"))
         menu.addItem(info(currentClipboardLine()))
 
@@ -72,15 +85,25 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             menu.addItem(info("History is not available"))
         }
 
+        var notices: [NSMenuItem] = []
         if settings.recallMode == .paste && !Recall.hasAccessibility {
-            menu.addItem(.separator())
             let item = action("Paste needs Accessibility permission\u{2026}", #selector(openAccessibility))
             item.toolTip = "Until Accessibility is granted, recalled clips go on the clipboard only."
-            menu.addItem(item)
+            notices.append(item)
+        }
+        if case .failed(let choice, let code) = hotkey.status {
+            let item = info("\(choice.title) is not available (another app may use it)")
+            item.toolTip = "RegisterEventHotKey returned \(code). Choose another Picker Hotkey."
+            notices.append(item)
+        }
+        if !notices.isEmpty {
+            menu.addItem(.separator())
+            notices.forEach(menu.addItem)
         }
 
         menu.addItem(.separator())
         menu.addItem(header("Settings"))
+        menu.addItem(submenu("Picker Hotkey", hotkeyMenu(settings)))
         menu.addItem(submenu("Recall", recallMenu(settings)))
         menu.addItem(submenu("Keep History", historyLimitMenu(settings)))
         menu.addItem(submenu("Largest Clip", maximumClipMenu(settings)))
@@ -93,6 +116,18 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         menu.addItem(action("Clear History\u{2026}", #selector(clearHistory)))
         menu.addItem(NSMenuItem(title: "Quit Simple Clipboard", action: #selector(NSApplication.terminate(_:)),
                                 keyEquivalent: "q"))
+    }
+
+    private func hotkeyMenu(_ settings: Settings) -> NSMenu {
+        let menu = NSMenu()
+        for choice in HotkeyChoice.allCases {
+            if choice == .none { menu.addItem(.separator()) }
+            let item = action(choice.title, #selector(chooseHotkey(_:)))
+            item.representedObject = choice.rawValue
+            item.state = settings.pickerHotkey == choice ? .on : .off
+            menu.addItem(item)
+        }
+        return menu
     }
 
     private func recallMenu(_ settings: Settings) -> NSMenu {
@@ -218,6 +253,18 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     }
 
     // MARK: actions
+
+    @objc private func openPicker() {
+        // Let the menu finish closing first, so the picker becomes the key window.
+        DispatchQueue.main.async { [picker] in picker.open() }
+    }
+
+    @objc private func chooseHotkey(_ sender: NSMenuItem) {
+        guard let text = sender.representedObject as? String, let choice = HotkeyChoice(rawValue: text) else { return }
+        settingsStore.update { $0.pickerHotkey = choice }
+        // Choosing the current choice again retries a registration that failed.
+        if hotkey.status != .registered(choice) { hotkey.register(choice) }
+    }
 
     @objc private func chooseRecallMode(_ sender: NSMenuItem) {
         guard let text = sender.representedObject as? String, let mode = RecallMode(rawValue: text) else { return }
