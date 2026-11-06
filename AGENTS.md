@@ -7,6 +7,10 @@
 - Settings live in the menu bar menu as submenus and are stored in user defaults. Do not add a settings file or a
   preferences window.
 - The menu shows statistics and settings, not clips. Clips are recalled from the picker.
+- The picker is a nonactivating `NSPanel`, so the user's app stays active and receives the paste. Do not activate
+  the app when the picker opens.
+- The picker draws its own rows and prompt (like noteapp's `/import` popup) and maps keys in `PickerView.pickerKey`.
+  Keep key behavior in `PickerModel`, which the tests drive without a window.
 - Popups follow noteapp's `/import` popup: box geometry, title bar, separators, content insets, typography,
   selectable rows and bottom action bar. Popups add no backdrop blur, dimming, tint or full-window fill.
 
