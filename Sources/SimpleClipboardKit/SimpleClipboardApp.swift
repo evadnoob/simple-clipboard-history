@@ -12,15 +12,26 @@ public enum SimpleClipboardApp {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var statusItem: NSStatusItem?
+    private var monitor: ClipboardMonitor?
+    private var menuController: StatusMenuController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.title = "clipboard"
-        let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "Quit Simple Clipboard", action: #selector(NSApplication.terminate(_:)),
-                                keyEquivalent: "q"))
-        item.menu = menu
-        statusItem = item
+        let settingsFile = SettingsFile(url: Settings.defaultURL())
+        settingsFile.reloadIfChanged()
+        let store: ClipStore
+        do {
+            store = try ClipStore(directory: ClipStore.defaultDirectory())
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Simple Clipboard cannot open its history"
+            alert.informativeText = "\(error)"
+            alert.runModal()
+            NSApplication.shared.terminate(nil)
+            return
+        }
+        let monitor = ClipboardMonitor(store: store, settings: { settingsFile.settings })
+        menuController = StatusMenuController(store: store, settingsFile: settingsFile, monitor: monitor)
+        monitor.start()
+        self.monitor = monitor
     }
 }
