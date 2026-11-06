@@ -13,7 +13,7 @@ public enum SimpleClipboardApp {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var monitor: ClipboardMonitor?
-    private var menuController: StatusMenuController?
+    private var statusItemController: StatusItemController?
     private var picker: PickerController?
     private var hotkey: GlobalHotkey?
 
@@ -34,7 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let picker = PickerController(store: store, settingsStore: settingsStore, monitor: monitor)
         let hotkey = GlobalHotkey { [weak picker] in picker?.toggle() }
         hotkey.register(settingsStore.settings.pickerHotkey)
-        let menuController = StatusMenuController(store: store, settingsStore: settingsStore, monitor: monitor,
+        let statusItemController = StatusItemController(store: store, settingsStore: settingsStore, monitor: monitor,
                                                   picker: picker, hotkey: hotkey)
         settingsStore.onChange = { [weak hotkey] settings in
             if let hotkey, hotkey.status != .registered(settings.pickerHotkey) { hotkey.register(settings.pickerHotkey) }
@@ -42,7 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         monitor.start()
         self.picker = picker
         self.hotkey = hotkey
-        self.menuController = menuController
+        self.statusItemController = statusItemController
         self.monitor = monitor
     }
 }

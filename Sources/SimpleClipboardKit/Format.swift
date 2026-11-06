@@ -35,6 +35,13 @@ enum Format {
         return title
     }
 
+    /// "Nov 6" in the user's locale.
+    static func shortDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.setLocalizedDateFormatFromTemplate("MMMd")
+        return formatter.string(from: date)
+    }
+
     static func dateTime(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium

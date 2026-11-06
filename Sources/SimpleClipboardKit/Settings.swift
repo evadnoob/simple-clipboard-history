@@ -8,9 +8,12 @@ enum RecallMode: String, CaseIterable {
     case paste
 }
 
-/// The settings values. Changed from the menu bar menu.
+/// The settings values. Changed from the settings panel.
 struct Settings: Equatable {
-    var recallMode: RecallMode = .clipboard
+    /// Paste by default, like Pastebot. Without Accessibility permission the clip goes on the clipboard only.
+    var recallMode: RecallMode = .paste
+    /// Recall pastes only the text, without fonts, colors or links. Shift-Return in the picker does the opposite.
+    var alwaysPastePlainText = false
     /// Most clips kept. The least recently copied clips are deleted first.
     var historyLimit = 1000
     /// Clips larger than this are not recorded.
@@ -23,7 +26,7 @@ struct Settings: Equatable {
     var maximumClipBytes: Int { maximumClipMegabytes * 1024 * 1024 }
 
     static let defaults = Settings()
-    /// Choices offered in the menu.
+    /// Choices offered in the settings panel.
     static let historyLimitChoices = [100, 500, 1000, 5000, 10_000]
     static let maximumClipMegabyteChoices = [5, 20, 50, 100]
 }
@@ -37,6 +40,7 @@ final class SettingsStore {
         static let ignoredApps = "ignoredApps"
         static let capturePaused = "capturePaused"
         static let pickerHotkey = "pickerHotkey"
+        static let alwaysPastePlainText = "alwaysPastePlainText"
     }
 
     private let defaults: UserDefaults
@@ -64,6 +68,7 @@ final class SettingsStore {
             settings.ignoredApps = apps.filter { !$0.isEmpty }
         }
         settings.capturePaused = defaults.bool(forKey: Key.capturePaused)
+        settings.alwaysPastePlainText = defaults.bool(forKey: Key.alwaysPastePlainText)
         if let text = defaults.string(forKey: Key.pickerHotkey), let choice = HotkeyChoice(rawValue: text) {
             settings.pickerHotkey = choice
         }
@@ -81,6 +86,7 @@ final class SettingsStore {
         defaults.set(updated.ignoredApps, forKey: Key.ignoredApps)
         defaults.set(updated.capturePaused, forKey: Key.capturePaused)
         defaults.set(updated.pickerHotkey.rawValue, forKey: Key.pickerHotkey)
+        defaults.set(updated.alwaysPastePlainText, forKey: Key.alwaysPastePlainText)
         onChange?(updated)
     }
 

@@ -43,11 +43,58 @@ model.scroll(by: -100)
 check(model.firstRow == 0, "scroll wheel stops at the top")
 
 // MARK: model: recall
-check(model.handle(.enter) == .recall(1), "return recalls the selected clip")
-check(model.handle(.recallNumber(3)) == .recall(3), "cmd-3 recalls the third visible row")
+check(model.handle(.enter) == .recall(1, .original), "return recalls the selected clip with formatting")
+check(model.handle(.recallNumber(3)) == .recall(3, .original), "cmd-3 recalls the third visible row")
 check(model.handle(.recallNumber(6)) == .none, "cmd-6 with five visible rows does nothing")
 _ = model.handle(.pageDown)
-check(model.handle(.recallNumber(1)) == .recall(Int64(model.firstRow + 1)), "numbers count from the first visible row")
+check(model.handle(.recallNumber(1)) == .recall(Int64(model.firstRow + 1), .original), "numbers count from the first visible row")
+
+// MARK: model: plain text
+model.reset()
+check(model.handle(.enterAlternate) == .recall(1, .plainText), "shift-return recalls plain text")
+model.alwaysPastePlainText = true
+check(model.handle(.enter) == .recall(1, .plainText), "always plain: return recalls plain text")
+check(model.handle(.enterAlternate) == .recall(1, .original), "always plain: shift-return keeps formatting")
+check(model.handle(.recallNumber(2)) == .recall(2, .plainText), "always plain: numbers recall plain text")
+model.alwaysPastePlainText = false
+
+// MARK: model: filter step
+model.reset()
+_ = model.handle(.text("odd"))
+_ = model.handle(.down)
+let filterClip = model.selectedClip!.id
+check(model.handle(.enterFilter) == .none && model.step == .filters(clipID: filterClip), "cmd-return opens the filters for the clip")
+check(model.filterRows.first == .heading(.textAndWriting), "filters start with a group heading")
+check(model.selectedFilter?.id == "plain-text", "first filter selected, not the heading")
+check(model.filterRows.filter { if case .heading = $0 { return true } else { return false } }.count == 3, "three group headings")
+_ = model.handle(.up)
+check(model.selectedFilter?.id == "plain-text", "up from the first filter stays on it")
+_ = model.handle(.down)
+check(model.selectedFilter?.id == "single-line", "down moves to the next filter")
+_ = model.handle(.end)
+check(model.selectedFilter?.id == TextFilter.all.last?.id, "end selects the last filter")
+_ = model.handle(.home)
+check(model.selectedFilter?.id == "plain-text", "home selects the first filter")
+_ = model.handle(.text("base64"))
+check(model.filterQuery == "base64" && model.query == "odd", "typing in the filter step searches filters only")
+check(model.filterRows == [.heading(.developer), .filter(TextFilter.named("base64-encode")!), .filter(TextFilter.named("base64-decode")!)],
+      "matching filters under their heading")
+_ = model.handle(.down)
+check(model.handle(.enter) == .recall(filterClip, .filter("base64-decode")), "return recalls the clip through the filter")
+check(model.handle(.enterAlternate) == .recall(filterClip, .filter("base64-decode")), "shift-return in the filter step is the same")
+_ = model.handle(.text("zzz"))
+check(model.filterRows.isEmpty && model.selectedFilter == nil && model.handle(.enter) == .none, "no matching filters, nothing to recall")
+check(model.handle(.escape) == .none && model.step == .clips, "escape goes back to the clips")
+check(model.query == "odd" && model.selectedClip?.id == filterClip, "clip query and selection kept")
+check(model.handle(.escape) == .close, "escape again closes")
+model.visibleRowCount = 4
+_ = model.handle(.enterFilter)
+for _ in 0..<12 { _ = model.handle(.down) }
+let selectedFilterRow = model.selectedFilterIndex!
+check(selectedFilterRow >= model.firstFilterRow && selectedFilterRow < model.firstFilterRow + 4, "filter list scrolls to the selection")
+model.reset()
+check(model.step == .clips, "reopening starts at the clips")
+model.visibleRowCount = 5
 
 // MARK: model: query
 model.reset()
@@ -95,6 +142,8 @@ func key(_ code: UInt16, _ characters: String, _ flags: NSEvent.ModifierFlags = 
 check(key(126, "") == .up && key(125, "") == .down, "arrows")
 check(key(116, "") == .pageUp && key(121, "") == .pageDown && key(115, "") == .home && key(119, "") == .end, "page keys")
 check(key(36, "\r") == .enter && key(76, "\u{3}") == .enter, "return and keypad enter")
+check(key(36, "\r", .shift) == .enterAlternate, "shift-return")
+check(key(36, "\r", .command) == .enterFilter, "command-return")
 check(key(53, "\u{1b}") == .escape && key(48, "\t") == .tab, "escape and tab")
 check(key(51, "\u{7f}") == .deleteBackward, "backspace")
 check(key(51, "\u{7f}", .option) == .deleteWordBackward, "option-backspace")
@@ -113,7 +162,7 @@ let view = PickerView(model: viewModel)
 view.now = { start }
 viewModel.reset()
 view.layout()
-let expectedRows = Int(floor(view.chrome.listRect.height / PickerStyle.rowHeight))
+let expectedRows = Int(floor(view.chrome.listRect.height / InterfaceStyle.rowHeight))
 check(viewModel.visibleRowCount == expectedRows && expectedRows >= 10, "row count follows the list height (\(expectedRows))")
 func render(_ view: NSView) -> NSBitmapImageRep {
     let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds)!
@@ -121,13 +170,13 @@ func render(_ view: NSView) -> NSBitmapImageRep {
     return bitmap
 }
 check(render(view).pixelsWide > 0, "picker draws")
-let secondRow = NSPoint(x: 100, y: view.chrome.listRect.minY + PickerStyle.rowHeight * 1.5)
+let secondRow = NSPoint(x: 100, y: view.chrome.listRect.minY + InterfaceStyle.rowHeight * 1.5)
 check(view.rowIndex(at: secondRow) == 1, "click point maps to a row")
 check(view.rowIndex(at: NSPoint(x: 100, y: 2)) == nil, "title row is not a clip row")
 var actions: [PickerAction] = []
 view.onAction = { actions.append($0) }
 view.perform(.recallNumber(2))
-check(actions == [.recall(2)], "view passes the model's action on")
+check(actions == [.recall(2, .original)], "view passes the model's action on")
 view.loadItems = { _ in [[Representation(type: NSPasteboard.PasteboardType.string.rawValue, data: Data("full text".utf8))]] }
 view.perform(.tab)
 check(viewModel.visibleRowCount < expectedRows, "preview makes the list shorter")
@@ -136,7 +185,21 @@ viewModel.reset()
 _ = viewModel.handle(.text("nothing like this"))
 check(render(view).pixelsWide > 0, "picker draws with no matches")
 check(PickerView.rowDetail(clip(3, "x"), now: start) == "3m  Safari", "row detail is age and app")
-check(PickerView.tail(of: "abcdef", fitting: PickerStyle.width(of: "def")) == "def", "long query shows its end")
+viewModel.reset()
+check(view.barHints.contains("\u{21E7}\u{21A9} plain") && view.barHints.contains("\u{2318}\u{21A9} filter"), "hints show plain and filter keys")
+viewModel.alwaysPastePlainText = true
+check(view.barHints.contains("\u{21E7}\u{21A9} formatted"), "always plain: hints swap")
+viewModel.alwaysPastePlainText = false
+view.perform(.enterFilter)
+check(render(view).pixelsWide > 0, "filter step draws")
+check(view.barHints.contains("esc back"), "filter step hints")
+let firstFilterPoint = NSPoint(x: 100, y: view.chrome.listRect.minY + InterfaceStyle.rowHeight * 1.5)
+check(view.rowIndex(at: firstFilterPoint) == 1, "filter row hit")
+check(view.rowIndex(at: NSPoint(x: 100, y: view.chrome.listRect.minY + 2)) == nil, "heading is not clickable")
+actions.removeAll()
+view.perform(.enter)
+check(actions == [.recall(1, .filter("plain-text"))], "view recalls through the filter")
+check(PickerView.tail(of: "abcdef", fitting: InterfaceStyle.width(of: "def")) == "def", "long query shows its end")
 
 // MARK: preview content
 let text = Data("hello".utf8)
@@ -159,7 +222,7 @@ if case .other(let types) = ClipPreview.make(from: [[Representation(type: "com.e
 } else { check(false, "other preview kind") }
 
 // MARK: panel placement
-let frame = PickerController.frame(for: PickerStyle.boxSize, on: NSScreen.main)
+let frame = PickerController.frame(for: InterfaceStyle.pickerSize, on: NSScreen.main)
 if let visible = NSScreen.main?.visibleFrame {
     check(visible.contains(frame), "picker frame is on the screen")
     check(abs(frame.midX - visible.midX) <= 1, "picker is centered horizontally")
@@ -193,7 +256,7 @@ if let directory = ProcessInfo.processInfo.environment["PICKER_SNAPSHOT_DIRECTOR
         snapshotView.appearance = NSAppearance(named: appearanceName)
         snapshotModel.reset()
         snapshotView.layout()
-        for (name, keys) in [("list", [PickerKey]()), ("preview", [.down, .tab]), ("search", [.text("test")])] {
+        for (name, keys) in [("list", [PickerKey]()), ("preview", [.down, .tab]), ("search", [.text("test")]), ("filters", [.enterFilter])] {
             snapshotModel.reset()
             keys.forEach { snapshotView.perform($0) }
             let bitmap = render(snapshotView)
