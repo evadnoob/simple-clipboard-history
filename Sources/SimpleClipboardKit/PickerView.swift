@@ -43,16 +43,12 @@ final class PickerView: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         let chrome = self.chrome
+        chrome.draw()
         if case .filters = model.step {
-            let clipPreview = model.selectedClip?.preview ?? ""
-            chrome.draw(title: "Filter", detail: clipPreview)
             drawFilterRows(in: chrome.listRect)
             drawBar(in: chrome.barRect)
             return
         }
-        let count = model.rows.count
-        let detail = model.query.isEmpty ? "\(count.formatted()) clips" : "\(count.formatted()) matching"
-        chrome.draw(title: "Clipboard", detail: count >= PickerModel.resultLimit ? "\(detail)+" : detail)
         drawRows(in: chrome.listRect)
         if model.previewOpen { drawPreview(in: chrome.previewRect) }
         drawBar(in: chrome.barRect)
@@ -83,7 +79,7 @@ final class PickerView: NSView {
             InterfaceStyle.draw(detail, in: NSRect(x: row.maxX - gap - detailWidth, y: row.minY, width: detailWidth, height: rowHeight),
                              font: InterfaceStyle.smallFont, color: .tertiaryLabelColor, alignment: .right)
             let textX = row.minX + gap * 2 + numberWidth
-            InterfaceStyle.draw(clip.preview, in: NSRect(x: textX, y: row.minY, width: max(0, row.maxX - gap * 2 - detailWidth - textX),
+            InterfaceStyle.draw(clip.preview, highlighting: model.query, in: NSRect(x: textX, y: row.minY, width: max(0, row.maxX - gap * 2 - detailWidth - textX),
                                                       height: rowHeight))
         }
     }
@@ -111,7 +107,7 @@ final class PickerView: NSView {
                                                                height: rowHeight),
                                     font: InterfaceStyle.smallFont, color: .tertiaryLabelColor, alignment: .right)
                 let textX = row.minX + gap * 2
-                InterfaceStyle.draw(filter.name, in: NSRect(x: textX, y: row.minY,
+                InterfaceStyle.draw(filter.name, highlighting: model.filterQuery, in: NSRect(x: textX, y: row.minY,
                                                             width: max(0, row.maxX - gap * 2 - summaryWidth - textX), height: rowHeight))
             }
         }
@@ -163,27 +159,28 @@ final class PickerView: NSView {
     private func drawBar(in rect: NSRect) {
         let gap = InterfaceStyle.gap
         let hints = barHints
-        let hintsWidth = min(InterfaceStyle.width(of: hints, font: InterfaceStyle.smallFont), rect.width * 0.7)
+        let hintsWidth = min(InterfaceStyle.width(of: hints, font: InterfaceStyle.smallFont), rect.width * 0.65)
         InterfaceStyle.draw(hints, in: NSRect(x: rect.maxX - hintsWidth, y: rect.minY, width: hintsWidth, height: rect.height),
-                         font: InterfaceStyle.smallFont, color: .tertiaryLabelColor, alignment: .right)
-        let prompt = ":"
-        let promptWidth = InterfaceStyle.width(of: prompt)
-        InterfaceStyle.draw(prompt, in: NSRect(x: rect.minX, y: rect.minY, width: promptWidth, height: rect.height),
-                         color: .secondaryLabelColor)
-        let queryX = rect.minX + promptWidth + gap / 2
-        let queryMaxWidth = max(0, rect.maxX - hintsWidth - gap - queryX)
-        let query = model.step == .clips ? model.query : model.filterQuery
-        let shown = Self.tail(of: query, fitting: queryMaxWidth - 2)
-        if shown.isEmpty {
-            InterfaceStyle.draw(model.step == .clips ? "search" : "filter", in: NSRect(x: queryX + 3, y: rect.minY, width: queryMaxWidth, height: rect.height),
-                             color: .tertiaryLabelColor)
-        } else {
-            InterfaceStyle.draw(shown, in: NSRect(x: queryX, y: rect.minY, width: queryMaxWidth, height: rect.height))
+                            font: InterfaceStyle.smallFont, color: .tertiaryLabelColor, alignment: .right)
+        let statusWidth = max(0, rect.width - hintsWidth - gap)
+        let status = Self.tail(of: barStatus, fitting: statusWidth, font: InterfaceStyle.smallFont)
+        InterfaceStyle.draw(status, in: NSRect(x: rect.minX, y: rect.minY, width: statusWidth, height: rect.height),
+                            font: InterfaceStyle.smallFont, color: .secondaryLabelColor)
+    }
+
+    /// The left of the bar: the count, and the typed text when there is some. There is no input field.
+    var barStatus: String {
+        switch model.step {
+        case .clips:
+            let count = model.rows.count
+            let shown = count >= PickerModel.resultLimit ? "\(count.formatted())+" : count.formatted()
+            if model.query.isEmpty { return "\(shown) clips" }
+            return "\(shown) matching \"\(model.query)\""
+        case .filters:
+            let count = model.filterRows.filter { if case .filter = $0 { return true } else { return false } }.count
+            if model.filterQuery.isEmpty { return "\(count) filters" }
+            return "\(count) filters matching \"\(model.filterQuery)\""
         }
-        // A bar cursor after the query.
-        let cursorX = queryX + (shown.isEmpty ? 0 : InterfaceStyle.width(of: shown)) + 1
-        NSColor.labelColor.setFill()
-        NSRect(x: cursorX, y: rect.minY + 3, width: 2, height: rect.height - 6).fill()
     }
 
     /// The key hints at the right of the bar. "plain" and "formatted" swap with Always Paste Plain Text.
@@ -198,10 +195,11 @@ final class PickerView: NSView {
     }
 
     /// The end of the text that fits the width, so the end of a long query stays visible.
-    static func tail(of text: String, fitting width: CGFloat) -> String {
+    static func tail(of text: String, fitting width: CGFloat, font: NSFont = InterfaceStyle.font) -> String {
+        guard InterfaceStyle.width(of: text, font: font) > width else { return text }
         var shown = Substring(text)
-        while !shown.isEmpty && InterfaceStyle.width(of: String(shown)) > width { shown = shown.dropFirst() }
-        return String(shown)
+        while !shown.isEmpty && InterfaceStyle.width(of: "\u{2026}" + shown, font: font) > width { shown = shown.dropFirst() }
+        return "\u{2026}" + shown
     }
 
     // MARK: keys and mouse

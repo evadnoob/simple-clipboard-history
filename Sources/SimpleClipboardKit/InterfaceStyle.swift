@@ -28,6 +28,27 @@ enum InterfaceStyle {
                                 attributes: [.font: font, .foregroundColor: color, .paragraphStyle: style])
     }
 
+    /// Like `draw`, with the first case-insensitive match of `highlight` in semibold, so typed text shows where it
+    /// matched.
+    static func draw(_ text: String, highlighting highlight: String, in rect: NSRect, color: NSColor = .labelColor) {
+        guard rect.width > 0 else { return }
+        let style = NSMutableParagraphStyle()
+        style.lineBreakMode = .byTruncatingTail
+        let attributed = NSMutableAttributedString(string: text, attributes: [.font: font, .foregroundColor: color,
+                                                                              .paragraphStyle: style])
+        let needle = highlight.trimmingCharacters(in: .whitespaces)
+        if !needle.isEmpty {
+            let range = (text as NSString).range(of: needle, options: [.caseInsensitive, .diacriticInsensitive])
+            if range.location != NSNotFound {
+                attributed.addAttributes([.font: NSFont.monospacedSystemFont(ofSize: font.pointSize, weight: .bold),
+                                          .underlineStyle: NSUnderlineStyle.single.rawValue], range: range)
+            }
+        }
+        let height = ceil(font.ascender - font.descender)
+        let target = NSRect(x: rect.minX, y: rect.minY + floor((rect.height - height) / 2), width: rect.width, height: height)
+        attributed.draw(with: target, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+    }
+
     static func selectionFill(_ rect: NSRect) {
         NSColor.tertiaryLabelColor.withAlphaComponent(0.20).setFill()
         rect.fill()
@@ -46,53 +67,44 @@ enum InterfaceStyle {
     }
 }
 
-/// The picker's frame inside its box: title row at the top, prompt bar at the bottom, content between.
+/// The picker's frame inside its box: the list at the top, a status bar at the bottom. No title row and no
+/// input field; typing narrows the list and the bar shows the count and the typed text.
 struct PickerChrome {
     let box: NSRect
     var previewOpen = false
 
     private var gap: CGFloat { InterfaceStyle.gap }
-    var titleHeight: CGFloat { InterfaceStyle.rowHeight + gap }
-    var barHeight: CGFloat { InterfaceStyle.rowHeight + gap * 2 }
-    var titleRect: NSRect { NSRect(x: box.minX + gap, y: box.minY, width: box.width - gap * 2, height: titleHeight) }
-    var titleSeparator: NSRect { NSRect(x: box.minX, y: box.minY + titleHeight, width: box.width, height: 1) }
+    var barHeight: CGFloat { InterfaceStyle.rowHeight + gap }
     var barSeparator: NSRect { NSRect(x: box.minX, y: box.maxY - barHeight, width: box.width, height: 1) }
     var barRect: NSRect {
-        NSRect(x: box.minX + gap, y: box.maxY - barHeight + gap, width: box.width - gap * 2, height: InterfaceStyle.rowHeight)
+        NSRect(x: box.minX + gap, y: box.maxY - barHeight + gap / 2, width: box.width - gap * 2, height: InterfaceStyle.rowHeight)
     }
 
-    /// Everything between the title separator and the bar separator, inset by the gap at the top and bottom.
+    /// Everything above the bar separator, inset by half the gap at the top and bottom.
     private var bodyRect: NSRect {
-        let top = titleSeparator.maxY + gap
-        return NSRect(x: box.minX, y: top, width: box.width, height: max(1, barSeparator.minY - gap - top))
+        let top = box.minY + gap / 2
+        return NSRect(x: box.minX, y: top, width: box.width, height: max(1, barSeparator.minY - gap / 2 - top))
     }
 
-    /// The clip rows. With the preview open they take the top third.
+    /// The rows. With the preview open they take the top third.
     var listRect: NSRect {
         guard previewOpen else { return bodyRect }
         let rows = max(1, floor(bodyRect.height / 3 / InterfaceStyle.rowHeight))
         return NSRect(x: bodyRect.minX, y: bodyRect.minY, width: bodyRect.width, height: rows * InterfaceStyle.rowHeight)
     }
 
-    var previewSeparator: NSRect { NSRect(x: box.minX, y: listRect.maxY + gap, width: box.width, height: 1) }
+    var previewSeparator: NSRect { NSRect(x: box.minX, y: listRect.maxY + gap / 2, width: box.width, height: 1) }
 
     var previewRect: NSRect {
         let top = previewSeparator.maxY + gap
         return NSRect(x: box.minX + gap, y: top, width: box.width - gap * 2, height: max(1, bodyRect.maxY - top))
     }
 
-    func draw(title: String, detail: String) {
+    func draw() {
         NSColor.textBackgroundColor.setFill()
         box.fill()
         InterfaceStyle.strokeBorder(box, color: .tertiaryLabelColor)
-        let titleWidth = min(InterfaceStyle.width(of: title), titleRect.width / 2)
-        let left = NSRect(x: titleRect.minX, y: titleRect.minY, width: titleWidth, height: titleRect.height)
-        let right = NSRect(x: left.maxX + gap, y: titleRect.minY,
-                           width: max(0, titleRect.maxX - left.maxX - gap), height: titleRect.height)
-        InterfaceStyle.draw(title, in: left)
-        InterfaceStyle.draw(detail, in: right, color: .secondaryLabelColor, alignment: .right)
         NSColor.separatorColor.setFill()
-        titleSeparator.fill()
         barSeparator.fill()
         if previewOpen { previewSeparator.fill() }
     }
