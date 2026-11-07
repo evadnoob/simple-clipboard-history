@@ -51,6 +51,27 @@ final class PickerModel {
     private(set) var previewOpen = false
     /// Return pastes plain text and Shift-Return formatted text when this is on; the other way round when off.
     var alwaysPastePlainText = false
+    var showPasteSpecial = true
+    /// Pixel geometry supplied by the view; nil keeps the headless fixed-row contract.
+    var rowHeight: ((Int) -> Double)?
+    var viewportHeight: Double = 0
+    var maximumVisibleItems = 8
+
+    func rowsFitting(from first: Int) -> Int {
+        guard let rowHeight else { return fixedVisibleRowCount }
+        let count = step == .clips ? rows.count : filterRows.count
+        var used = 0.0, result = 0
+        for index in first..<max(first, count) {
+            let height = rowHeight(index)
+            if result >= maximumVisibleItems || used + height > viewportHeight { break }
+            used += height; result += 1
+        }
+        return max(1, result)
+    }
+
+    func updateViewport() {
+        visibleRowCount = rowsFitting(from: step == .clips ? firstRow : firstFilterRow)
+    }
 
     private(set) var filterQuery = ""
     private(set) var filterRows: [FilterRow] = []
@@ -60,8 +81,10 @@ final class PickerModel {
     private var savedClipState: (query: String, selected: Int?, first: Int)?
 
     /// Set by the view from its height.
-    var visibleRowCount = 10 {
-        didSet { visibleRowCount = max(1, visibleRowCount); scrollToSelection() }
+    private var fixedVisibleRowCount = 10
+    var visibleRowCount: Int {
+        get { rowHeight == nil ? fixedVisibleRowCount : rowsFitting(from: step == .clips ? firstRow : firstFilterRow) }
+        set { fixedVisibleRowCount = max(1, newValue); scrollToSelection() }
     }
 
     init(search: @escaping (String, Int) -> [ClipSummary]) {
@@ -83,13 +106,17 @@ final class PickerModel {
         step = .clips
         query = ""
         previewOpen = false
+        selectedIndex = nil
         reload()
     }
 
     func reload() {
+        let previousID = selectedClip?.id
         rows = search(query, Self.resultLimit)
         firstRow = 0
-        selectedIndex = rows.isEmpty ? nil : 0
+        selectedIndex = previousID.flatMap { id in rows.firstIndex { $0.id == id } }
+        if selectedIndex == nil { selectedIndex = rows.isEmpty ? nil : 0 }
+        scrollToSelection()
     }
 
     // MARK: selection
@@ -106,11 +133,26 @@ final class PickerModel {
         scrollToSelection()
     }
 
+    /// Earliest start of the final fitting page, accounting for both pixels and the item cap.
+    private var lastPageStart: Int {
+        let count = step == .clips ? rows.count : filterRows.count
+        guard let rowHeight else { return max(0, count - visibleRowCount) }
+        var first = count, used = 0.0, fitted = 0
+        while first > 0 && fitted < maximumVisibleItems {
+            let height = rowHeight(first - 1)
+            if fitted > 0 && used + height > viewportHeight { break }
+            used += height
+            fitted += 1
+            first -= 1
+        }
+        return first
+    }
+
     /// Scrolls by whole rows, for the scroll wheel. The selection stays where it is.
     func scroll(by rowCount: Int) {
         switch step {
-        case .clips: firstRow = min(max(0, firstRow + rowCount), max(0, rows.count - visibleRowCount))
-        case .filters: firstFilterRow = min(max(0, firstFilterRow + rowCount), max(0, filterRows.count - visibleRowCount))
+        case .clips: firstRow = min(max(0, firstRow + rowCount), lastPageStart)
+        case .filters: firstFilterRow = min(max(0, firstFilterRow + rowCount), lastPageStart)
         }
     }
 
@@ -119,14 +161,14 @@ final class PickerModel {
         case .clips:
             guard let selected = selectedIndex else { firstRow = 0; return }
             if selected < firstRow { firstRow = selected }
-            if selected >= firstRow + visibleRowCount { firstRow = selected - visibleRowCount + 1 }
+            while selected >= firstRow + rowsFitting(from: firstRow) { firstRow += 1 }
         case .filters:
             guard let selected = selectedFilterIndex else { firstFilterRow = 0; return }
             // Keep the heading above the first filter of a group in view.
             var top = selected
             if selected > 0, case .heading = filterRows[selected - 1] { top = selected - 1 }
             if top < firstFilterRow { firstFilterRow = top }
-            if selected >= firstFilterRow + visibleRowCount { firstFilterRow = selected - visibleRowCount + 1 }
+            while selected >= firstFilterRow + rowsFitting(from: firstFilterRow) { firstFilterRow += 1 }
         }
     }
 
@@ -175,12 +217,14 @@ final class PickerModel {
         case .end: select(rows.count - 1)
         case .escape:
             if previewOpen { previewOpen = false; return .none }
+            if !query.isEmpty { query = ""; reload(); return .none }
             return .close
         case .tab:
             if selectedIndex != nil || previewOpen { previewOpen.toggle() }
         case .enter:
             return selectedClip.map { .recall($0.id, defaultFormat) } ?? .none
         case .enterAlternate:
+            guard showPasteSpecial else { return .none }
             return selectedClip.map { .recall($0.id, alternateFormat) } ?? .none
         case .enterFilter:
             guard let clip = selectedClip else { return .none }

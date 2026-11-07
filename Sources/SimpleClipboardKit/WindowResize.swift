@@ -104,7 +104,8 @@ final class WindowCornerView: NSView {
     let corner: WindowCorner
     private var startFrame = NSRect.zero
     private var startMouse = NSPoint.zero
-    /// Called after the drag ends, with the window's new frame.
+    /// Brackets the drag so a horizontal-only resize preserves a content-driven height cap.
+    var onResizeStarted: ((NSRect) -> Void)?
     var onResizeEnded: ((NSRect) -> Void)?
 
     init(corner: WindowCorner) {
@@ -142,15 +143,16 @@ final class WindowCornerView: NSView {
     override func mouseDown(with event: NSEvent) {
         guard let window else { return }
         startFrame = window.frame
-        startMouse = NSEvent.mouseLocation
+        startMouse = window.convertPoint(toScreen: event.locationInWindow)
+        onResizeStarted?(startFrame)
     }
 
     override func mouseDragged(with event: NSEvent) {
         guard let window else { return }
-        let mouse = NSEvent.mouseLocation
+        let mouse = window.convertPoint(toScreen: event.locationInWindow)
         let proposed = WindowFrame.dragged(startFrame, corner: corner, dx: mouse.x - startMouse.x, dy: mouse.y - startMouse.y,
                                            minimum: window.minSize,
-                                           maximum: WindowFrame.largestSize(of: NSScreen.screens.map { $0.frame }))
+                                           maximum: window.maxSize)
         window.setFrame(proposed, display: true)
     }
 
