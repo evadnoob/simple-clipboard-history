@@ -273,6 +273,76 @@ sizeController.saveSize(NSSize(width: 10, height: 10))
 check(sizeController.savedSize == NSSize(width: 800, height: 600), "invalid size does not overwrite saved cap")
 sizeDefaults.removePersistentDomain(forName: sizeSuite)
 
+// MARK: integrated typography and selected-row contrast
+check(InterfaceStyle.font == NSFont.systemFont(ofSize: 13, weight: .regular)
+    && InterfaceStyle.smallFont == NSFont.systemFont(ofSize: 11, weight: .regular), "shared typography uses system fonts")
+func luminance(_ color: NSColor) -> Double {
+    let rgb = color.usingColorSpace(.sRGB)!
+    func linear(_ value: CGFloat) -> Double {
+        let value = Double(value)
+        return value <= 0.04045 ? value / 12.92 : pow((value + 0.055) / 1.055, 2.4)
+    }
+    return 0.2126 * linear(rgb.redComponent) + 0.7152 * linear(rgb.greenComponent) + 0.0722 * linear(rgb.blueComponent)
+}
+for appearanceName in [NSAppearance.Name.aqua, .darkAqua] {
+    NSAppearance(named: appearanceName)!.performAsCurrentDrawingAppearance {
+        let foreground = luminance(PickerView.rowForeground(selected: true))
+        let background = luminance(.selectedContentBackgroundColor)
+        let contrast = (max(foreground, background) + 0.05) / (min(foreground, background) + 0.05)
+        print("Selected production foreground contrast in \(appearanceName.rawValue): \(contrast):1")
+        check(contrast >= 4.5, "selected 13pt row text meets 4.5:1 contrast in \(appearanceName.rawValue): \(contrast)")
+
+        // Exercise the production renderer, including symbols and the filter step, at readable 2x.
+        let renderedModel = PickerModel(search: { _, _ in [clip(901, "Selected production text")] })
+        let renderedView = PickerView(model: renderedModel)
+        renderedView.appearance = NSAppearance(named: appearanceName)
+        renderedView.settings.showTimestamps = true
+        renderedView.now = { start }
+        renderedModel.reset()
+        renderedView.setFrameSize(NSSize(width: 560, height: 300))
+        renderedView.layout()
+        func bitmap() -> NSBitmapImageRep {
+            let result = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 1120, pixelsHigh: 600,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+            result.size = renderedView.bounds.size
+            renderedView.cacheDisplay(in: renderedView.bounds, to: result)
+            return result
+        }
+        func assertForeground(_ image: NSBitmapImageRep, in region: NSRect, label: String) {
+            let expected = PickerView.rowForeground(selected: true).usingColorSpace(.sRGB)!
+            var matchingPixels = 0
+            var bestContrast = 0.0
+            for y in Int(region.minY * 2)..<Int(region.maxY * 2) {
+                for x in Int(region.minX * 2)..<Int(region.maxX * 2) {
+                    let pixel = image.colorAt(x: x, y: y)!.usingColorSpace(.sRGB)!
+                    let difference = max(abs(pixel.redComponent - expected.redComponent),
+                        abs(pixel.greenComponent - expected.greenComponent), abs(pixel.blueComponent - expected.blueComponent))
+                    if difference < 0.06 {
+                        matchingPixels += 1
+                        let value = luminance(pixel)
+                        bestContrast = max(bestContrast, (max(value, background) + 0.05) / (min(value, background) + 0.05))
+                    }
+                }
+            }
+            print("Rendered \(appearanceName.rawValue) \(label): \(matchingPixels) foreground pixels, \(bestContrast):1 contrast")
+            check(matchingPixels >= 3 && bestContrast >= 4.5,
+                "rendered selected \(label) uses contrasting production foreground in \(appearanceName.rawValue)")
+        }
+        let row = renderedView.visibleRows.first!.rect
+        let image = bitmap()
+        assertForeground(image, in: NSRect(x: 8, y: row.minY, width: 10, height: row.height), label: "number")
+        assertForeground(image, in: NSRect(x: 26, y: row.midY - 7, width: 14, height: 14), label: "symbol")
+        assertForeground(image, in: NSRect(x: 48, y: row.minY, width: 180, height: row.height), label: "clip text")
+        assertForeground(image, in: NSRect(x: 400, y: row.minY, width: 152, height: row.height), label: "timestamp")
+        renderedView.perform(.enterFilter)
+        let filterRow = renderedView.visibleRows.first { $0.index == renderedModel.selectedFilterIndex }!.rect
+        let filterImage = bitmap()
+        assertForeground(filterImage, in: NSRect(x: 16, y: filterRow.minY, width: 140, height: filterRow.height), label: "filter name")
+        assertForeground(filterImage, in: NSRect(x: 280, y: filterRow.minY, width: 272, height: filterRow.height), label: "filter summary")
+    }
+}
+
 // MARK: redesign regressions: real lines, independent geometry, viewport and accessibility
 var multiline = clip(101, "flattened title must not render")
 multiline.contentPreview = "first\n\nthird\nfourth\nfifth"
@@ -512,11 +582,21 @@ check(hotkey.status == .off, "none registers nothing")
 if let directory = ProcessInfo.processInfo.environment["PICKER_SNAPSHOT_DIRECTORY"] {
     // Synthetic only: screenshot generation must never expose clipboard history.
     try! FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
-    let fixtures = [multiline, imageSummary] + all
+    let fixtures = [
+        clip(201, "Design review notes\nKeep the menu bar simple."),
+        clip(202, "https://developer.apple.com/documentation/appkit"),
+        clip(203, "Meeting agenda\nReview keyboard shortcuts\nConfirm release checklist"),
+        clip(204, "swift build -c release --product SimpleClipboard"),
+        clip(205, "Thanks for the update. I will review the changes today."),
+        clip(206, "Shopping list\nCoffee\nBread\nApples"),
+        clip(207, "# Release checklist\nRun tests\nReview settings\nVerify paste"),
+        clip(208, "A small clipboard history, one shortcut away.")
+    ]
     let snapshotModel = PickerModel(search: { query, limit in
         Array(fixtures.filter { query.isEmpty || $0.contentPreview.localizedCaseInsensitiveContains(query) }.prefix(limit))
     })
     let snapshotView = PickerView(model: snapshotModel)
+    snapshotView.now = { start }
     snapshotView.setFrameSize(NSSize(width: 460, height: snapshotView.desiredHeight(cap: 600, screenHeight: 800)))
     snapshotView.loadItems = { id in
         let content = fixtures.first { $0.id == id }?.contentPreview ?? ""
@@ -528,6 +608,16 @@ if let directory = ProcessInfo.processInfo.environment["PICKER_SNAPSHOT_DIRECTOR
         snapshotModel.reset()
         snapshotView.setFrameSize(NSSize(width: 460, height: snapshotView.desiredHeight(cap: 600, screenHeight: 800)))
         snapshotView.layout()
+        if appearanceName == .aqua {
+            let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(snapshotView.bounds.width * 2),
+                pixelsHigh: Int(snapshotView.bounds.height * 2), bitsPerSample: 8, samplesPerPixel: 4,
+                hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+            bitmap.size = snapshotView.bounds.size
+            snapshotView.cacheDisplay(in: snapshotView.bounds, to: bitmap)
+            check(bitmap.pixelsWide == Int(snapshotView.bounds.width * 2), "README picker snapshot renders at 2x")
+            try! bitmap.representation(using: .png, properties: [:])!.write(
+                to: URL(fileURLWithPath: directory).appendingPathComponent("picker.png"))
+        }
         for (name, keys) in [("list", [PickerKey]()), ("preview", [.down, .tab]), ("search", [.text("test")]), ("filters", [.enterFilter])] {
             snapshotModel.reset()
             keys.forEach { snapshotView.perform($0) }

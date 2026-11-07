@@ -128,29 +128,39 @@ final class PickerView: NSView {
         for (position, entry) in visibleRows.enumerated() {
             let index = entry.index, row = entry.rect
             let clip = model.rows[index]
-            if index == model.selectedIndex { InterfaceStyle.selectionFill(row) }
+            let selected = index == model.selectedIndex
+            let foreground = Self.rowForeground(selected: selected)
+            if selected { InterfaceStyle.selectionFill(row) }
             var textX = row.minX + gap
             if position < 9 {
                 InterfaceStyle.draw("\(position + 1)", in: NSRect(x: textX, y: row.minY, width: 10, height: row.height),
-                                    font: InterfaceStyle.smallFont, color: .tertiaryLabelColor)
+                                    font: InterfaceStyle.smallFont, color: selected ? foreground : .tertiaryLabelColor)
             }
             textX += 18
             if settings.showTypeIcons {
                 let name = clip.kind == "image" ? "photo" : clip.kind == "files" ? "doc" : "doc.text"
-                NSImage(systemSymbolName: name, accessibilityDescription: clip.kind)?.draw(
-                    in: NSRect(x: textX, y: row.midY - 7, width: 14, height: 14),
-                    from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+                if let symbol = NSImage(systemSymbolName: name, accessibilityDescription: clip.kind) {
+                    let tinted = NSImage(size: NSSize(width: 14, height: 14), flipped: false) { bounds in
+                        symbol.draw(in: bounds)
+                        foreground.setFill()
+                        bounds.fill(using: .sourceIn)
+                        return true
+                    }
+                    tinted.draw(in: NSRect(x: textX, y: row.midY - 7, width: 14, height: 14),
+                                from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+                }
                 textX += 22
             }
             let detail = settings.showTimestamps ? Self.rowDetail(clip, now: now()) : ""
             let detailWidth = min(row.width / 3, InterfaceStyle.width(of: detail, font: InterfaceStyle.smallFont))
             InterfaceStyle.draw(detail, in: NSRect(x: row.maxX - gap - detailWidth, y: row.minY,
                                 width: detailWidth, height: row.height), font: InterfaceStyle.smallFont,
-                                color: .secondaryLabelColor, alignment: .right)
+                                color: selected ? foreground : .secondaryLabelColor, alignment: .right)
             for (line, text) in contentLines(for: clip).enumerated() {
                 InterfaceStyle.draw(text, highlighting: model.query,
                     in: NSRect(x: textX, y: row.minY + CGFloat(settings.pickerDensity) + CGFloat(line) * InterfaceStyle.lineHeight,
-                               width: max(0, row.maxX - gap * 2 - detailWidth - textX), height: InterfaceStyle.lineHeight))
+                               width: max(0, row.maxX - gap * 2 - detailWidth - textX), height: InterfaceStyle.lineHeight),
+                    color: foreground)
             }
         }
     }
@@ -171,16 +181,24 @@ final class PickerView: NSView {
                 InterfaceStyle.draw(group.rawValue, in: row.insetBy(dx: gap, dy: 0), font: InterfaceStyle.smallFont,
                                     color: .secondaryLabelColor)
             case .filter(let filter):
-                if index == model.selectedFilterIndex { InterfaceStyle.selectionFill(row) }
+                let selected = index == model.selectedFilterIndex
+                let foreground = Self.rowForeground(selected: selected)
+                if selected { InterfaceStyle.selectionFill(row) }
                 let summaryWidth = min(InterfaceStyle.width(of: filter.summary, font: InterfaceStyle.smallFont), row.width / 2)
                 InterfaceStyle.draw(filter.summary, in: NSRect(x: row.maxX - gap - summaryWidth, y: row.minY, width: summaryWidth,
                                                                height: rowHeight),
-                                    font: InterfaceStyle.smallFont, color: .tertiaryLabelColor, alignment: .right)
+                                    font: InterfaceStyle.smallFont, color: selected ? foreground : .tertiaryLabelColor, alignment: .right)
                 let textX = row.minX + gap * 2
                 InterfaceStyle.draw(filter.name, highlighting: model.filterQuery, in: NSRect(x: textX, y: row.minY,
-                                                            width: max(0, row.maxX - gap * 2 - summaryWidth - textX), height: rowHeight))
+                                                            width: max(0, row.maxX - gap * 2 - summaryWidth - textX), height: rowHeight),
+                                    color: foreground)
             }
         }
+    }
+
+    /// Custom-drawn rows must explicitly use the system's selected foreground over blue selection.
+    static func rowForeground(selected: Bool) -> NSColor {
+        selected ? .alternateSelectedControlTextColor : .labelColor
     }
 
     /// The right-hand detail of a row: age, and the source app when known.

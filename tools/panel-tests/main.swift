@@ -163,6 +163,22 @@ check(StatusItemController.icon.isTemplate && StatusItemController.icon.size.wid
 
 // MARK: snapshots for a visual check (only with PANEL_SNAPSHOT_DIRECTORY set)
 if let directory = ProcessInfo.processInfo.environment["PANEL_SNAPSHOT_DIRECTORY"] {
+    try! FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+    // README uses an ordinary production view with default settings and synthetic statistics.
+    let normalView = SettingsPanelView()
+    var normalContent = content()
+    normalContent.settings = Settings()
+    normalView.appearance = NSAppearance(named: .aqua)
+    normalView.show(normalContent)
+    normalView.layoutSubtreeIfNeeded()
+    let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(normalView.bounds.width * 2),
+        pixelsHigh: Int(normalView.bounds.height * 2), bitsPerSample: 8, samplesPerPixel: 4,
+        hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+    bitmap.size = normalView.bounds.size
+    normalView.cacheDisplay(in: normalView.bounds, to: bitmap)
+    check(bitmap.pixelsWide == Int(normalView.bounds.width * 2), "README panel snapshot renders at 2x")
+    try! bitmap.representation(using: .png, properties: [:])!.write(
+        to: URL(fileURLWithPath: directory).appendingPathComponent("control-panel.png"))
     for appearanceName in [NSAppearance.Name.aqua, .darkAqua] {
         view.appearance = NSAppearance(named: appearanceName)
         view.show(withNotices)
@@ -216,7 +232,9 @@ view.show(content())
 // MARK: disabled operations, accessibility, keyboard focus
 for name in ["import", "export"] {
     let control = button(name)!
-    check(!control.isEnabled && control.title.contains("Not implemented"), "\(name) visibly unavailable")
+    check(!control.isEnabled && control.title == "\(name.capitalized): Not implemented"
+        && !control.title.unicodeScalars.contains(where: { $0.properties.generalCategory == .dashPunctuation }),
+        "\(name) visibly unavailable with a colon label and no dash characters")
     var invoked = false
     control.onPress = { invoked = true }
     control.press()
