@@ -23,5 +23,17 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
-codesign --force -s - "$app"
+# Sign with a fixed identity so macOS keeps the Accessibility permission across rebuilds (an ad-hoc signature
+# changes with every build). Create the identity once with tools/create-signing-identity.sh. Without it, the build
+# is signed ad-hoc and still runs.
+identity=${SIGNING_IDENTITY:-evadnoob Local Code Signing}
+if security find-identity -p codesigning | grep -qF "\"$identity\""; then
+    codesign --force -s "$identity" "$app"
+    echo "Signed with \"$identity\""
+else
+    echo "warning: code signing identity \"$identity\" not found; signing ad-hoc. Accessibility permission will not" >&2
+    echo "         survive rebuilds. Create the identity with: bash tools/create-signing-identity.sh" >&2
+    codesign --force -s - "$app"
+fi
+codesign --verify --strict "$app"
 echo "Built $app"

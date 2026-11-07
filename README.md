@@ -15,6 +15,21 @@ bash bundle.sh            # build SimpleClipboard.app
 open SimpleClipboard.app
 ```
 
+## Code signing
+
+`bundle.sh` signs the app with the code signing identity "evadnoob Local Code Signing" (override with
+`SIGNING_IDENTITY`). A fixed identity keeps the app's designated requirement the same across rebuilds, so macOS
+keeps its Accessibility permission. An ad-hoc signature changes with every build, and macOS then asks again.
+
+Create the identity once per machine; it is a self-signed certificate in the login keychain:
+
+```bash
+bash tools/create-signing-identity.sh
+```
+
+`security find-identity -p codesigning` lists it as `CSSMERR_TP_NOT_TRUSTED`. That is expected; `codesign` does not
+need a trusted certificate. Without the identity, `bundle.sh` prints a warning and signs ad-hoc.
+
 ## Menu bar
 
 The menu bar item is a clipboard icon (the `list.clipboard` symbol), dimmed while capture is paused. Clicking it
