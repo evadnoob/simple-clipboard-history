@@ -10,12 +10,18 @@ final class StatusItemController: NSObject, NSWindowDelegate {
     private let picker: PickerController
     private let hotkey: GlobalHotkey
     private var statistics: StoreStatistics?
+    private let loginItem: LoginItemController
     let panelView = SettingsPanelView()
-    private lazy var panel: FloatingPanel = {
-        let panel = FloatingPanel(contentView: panelView, size: panelView.frame.size)
-        panel.delegate = self
-        return panel
+    private lazy var panelController: SettingsPanelWindowController = {
+        let controller = SettingsPanelWindowController(view: panelView) { [weak self] in
+            let window = self?.statusItem.button?.window
+            return (window?.frame, (window?.screen ?? NSScreen.main)?.visibleFrame
+                    ?? NSRect(x: 0, y: 0, width: 800, height: 600))
+        }
+        controller.panel.delegate = self
+        return controller
     }()
+    private var panel: FloatingPanel { panelController.panel }
     /// The app in front when the panel opened. The panel does not activate Simple Clipboard, so this is the
     /// user's app.
     private var frontmostApp: NSRunningApplication?
@@ -24,7 +30,8 @@ final class StatusItemController: NSObject, NSWindowDelegate {
     private var closedByResignAt = Date.distantPast
 
     init(store: ClipStore, settingsStore: SettingsStore, monitor: ClipboardMonitor, picker: PickerController,
-         hotkey: GlobalHotkey) {
+         hotkey: GlobalHotkey, loginItem: LoginItemController = LoginItemController()) {
+        self.loginItem = loginItem
         self.store = store
         self.settingsStore = settingsStore
         self.monitor = monitor
@@ -61,6 +68,7 @@ final class StatusItemController: NSObject, NSWindowDelegate {
 
     private func updateIcon() {
         let paused = settingsStore.settings.capturePaused
+        statusItem.button?.title = "" // Statistics belong only inside the panel.
         statusItem.button?.appearsDisabled = paused
         statusItem.button?.toolTip = paused ? "Simple Clipboard (capture paused)" : "Simple Clipboard"
     }
@@ -93,8 +101,7 @@ final class StatusItemController: NSObject, NSWindowDelegate {
     }
 
     private func showContent() {
-        panelView.show(content())
-        panel.setFrame(panelFrame(for: panelView.frame.size), display: true)
+        panelController.show(content())
     }
 
     func content() -> SettingsPanelContent {
@@ -114,21 +121,8 @@ final class StatusItemController: NSObject, NSWindowDelegate {
         }
         return SettingsPanelContent(settings: settings, statistics: statistics, clipboardLine: clipboardLine(),
                                     frontmostApp: front.map { (identifier: $0.0, name: $0.1) }, notices: notices,
-                                    appNames: names, hotkeyLabel: hotkeyLabel)
-    }
-
-    /// Under the menu bar item, kept on its screen.
-    private func panelFrame(for size: NSSize) -> NSRect {
-        guard let buttonWindow = statusItem.button?.window else {
-            return PickerController.frame(for: size, on: NSScreen.main)
-        }
-        let anchor = buttonWindow.frame
-        let screen = buttonWindow.screen ?? NSScreen.main
-        var x = anchor.minX
-        if let visible = screen?.visibleFrame {
-            x = min(max(visible.minX + 4, x), visible.maxX - size.width - 4)
-        }
-        return NSRect(x: floor(x), y: floor(anchor.minY - size.height - 4), width: size.width, height: size.height)
+                                    appNames: names, hotkeyLabel: hotkeyLabel,
+                                    loginEnabled: loginItem.isEnabled, loginMessage: loginItem.message)
     }
 
     private func makeActions() -> SettingsPanelActions {
@@ -167,6 +161,11 @@ final class StatusItemController: NSObject, NSWindowDelegate {
                 if let self { self.hotkey.register(self.settingsStore.settings.pickerHotkey); self.refresh() }
             }
         }
+        actions.setLoginEnabled = { [weak self] enabled in
+            self?.loginItem.setEnabled(enabled)
+            self?.refresh()
+        }
+        actions.openLoginSettings = { [weak self] in self?.loginItem.openSettings() }
         actions.quit = { NSApplication.shared.terminate(nil) }
         actions.close = { [weak self] in self?.closePanel() }
         return actions
@@ -202,5 +201,37 @@ final class StatusItemController: NSObject, NSWindowDelegate {
             return bundleIdentifier
         }
         return FileManager.default.displayName(atPath: url.path).replacingOccurrences(of: ".app", with: "")
+    }
+}
+
+/// Owns the production settings window's sizing path, including view-only confirmation changes.
+/// Placement is injectable so window fitting can be checked without a status item or live history.
+final class SettingsPanelWindowController {
+    let panel: FloatingPanel
+    private let view: SettingsPanelView
+    private let placement: () -> (anchor: NSRect?, visibleFrame: NSRect)
+
+    init(view: SettingsPanelView,
+         placement: @escaping () -> (anchor: NSRect?, visibleFrame: NSRect)) {
+        self.view = view
+        self.placement = placement
+        panel = FloatingPanel(contentView: view, size: view.frame.size)
+        view.onPreferredSizeChange = { [weak self] in self?.resizeToFit() }
+    }
+
+    func show(_ content: SettingsPanelContent) {
+        view.show(content)
+        resizeToFit()
+    }
+
+    func resizeToFit() {
+        let (anchor, visible) = placement()
+        let top = floor(min(anchor.map { $0.minY - 4 } ?? visible.maxY - 4, visible.maxY - 4))
+        let bottom = ceil(visible.minY + 4)
+        view.maximumHeight = max(1, top - bottom)
+        let size = view.frame.size
+        let x = min(max(visible.minX + 4, anchor?.minX ?? visible.midX - size.width / 2),
+                    visible.maxX - size.width - 4)
+        panel.setFrame(NSRect(x: floor(x), y: top - size.height, width: size.width, height: size.height), display: true)
     }
 }

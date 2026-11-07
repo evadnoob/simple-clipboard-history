@@ -1,11 +1,9 @@
 import AppKit
 
-/// The look of the picker and the settings panel, taken from noteapp's /import popup (ImportWizardStyle and ImportWizardChrome in
-/// noteapp Sources/NoteApp/ImportWizardControls.swift at 617d7221): the monospaced interface font, square
-/// corners, a hairline border, a title row with a separator, neutral selection fill and a bottom bar.
+/// Shared typography and geometry for the picker and control panel.
 enum InterfaceStyle {
-    static let font = NSFont.monospacedSystemFont(ofSize: 13, weight: .regular)
-    static let smallFont = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+    static let font = NSFont.systemFont(ofSize: 13, weight: .regular)
+    static let smallFont = NSFont.systemFont(ofSize: 11, weight: .regular)
     static var lineHeight: CGFloat { ceil(font.ascender - font.descender + font.leading) }
     static var rowHeight: CGFloat { lineHeight + 4 }
     static let gap: CGFloat = 8
@@ -40,7 +38,7 @@ enum InterfaceStyle {
         if !needle.isEmpty {
             let range = (text as NSString).range(of: needle, options: [.caseInsensitive, .diacriticInsensitive])
             if range.location != NSNotFound {
-                attributed.addAttributes([.font: NSFont.monospacedSystemFont(ofSize: font.pointSize, weight: .bold),
+                attributed.addAttributes([.font: NSFont.systemFont(ofSize: font.pointSize, weight: .bold),
                                           .underlineStyle: NSUnderlineStyle.single.rawValue], range: range)
             }
         }
@@ -50,7 +48,7 @@ enum InterfaceStyle {
     }
 
     static func selectionFill(_ rect: NSRect) {
-        NSColor.tertiaryLabelColor.withAlphaComponent(0.20).setFill()
+        NSColor.selectedContentBackgroundColor.setFill()
         rect.fill()
     }
 
