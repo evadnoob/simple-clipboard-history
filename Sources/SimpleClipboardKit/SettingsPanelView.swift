@@ -215,11 +215,11 @@ final class SettingsPanelView: NSView {
              height: rowHeight, font: InterfaceStyle.smallFont, color: .secondaryLabelColor, identifier: "clipboardStatus")
         y += rowHeight
         let chart = CopyActivityChartView(days: settings.copyActivityDays, now: content.now, buckets: content.copyActivity)
-        chart.frame = NSRect(x: gap, y: y, width: width - gap * 2, height: 64)
+        chart.frame = NSRect(x: gap, y: y, width: width - gap * 2, height: 43)
         chart.setAccessibilityLabel("Copy activity over the last \(settings.copyActivityDays) days, hourly")
         container.addSubview(chart)
         activityChart = chart
-        y += 70
+        y += 49
         dropdown("copyActivityDays", "Copy activity", Settings.copyActivityDayChoices.map { "\($0) days" },
                  Settings.copyActivityDayChoices.firstIndex(of: settings.copyActivityDays)) { [weak self] index in
             self?.actions.update { $0.copyActivityDays = Settings.copyActivityDayChoices[index] }
@@ -309,7 +309,7 @@ final class SettingsPanelView: NSView {
         exportButton.isEnabled = false
         add(exportButton, x: 198, width: 184)
         y += controlHeight + 2
-        section("Picker UI")
+        section("Look and feel")
         dropdown("pickerWidth", "Width", ["Narrow (360 pt)", "Standard (460 pt)", "Wide (560 pt)"], Settings.pickerWidthChoices.firstIndex(of: settings.pickerWidth)) { [weak self] index in
             self?.actions.update { $0.pickerWidth = Settings.pickerWidthChoices[index] }
         }

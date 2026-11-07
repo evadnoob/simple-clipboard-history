@@ -89,14 +89,14 @@ check(view.activityChart?.days == 5 && view.activityChart?.buckets.first?.hour =
       && view.activityChart?.buckets.first?.copies == 3, "production activity chart receives hourly aggregate data and selected range")
 for days in Settings.copyActivityDayChoices {
     let chart = CopyActivityChartView(days: days, now: now, buckets: [])
-    chart.frame = NSRect(x: 0, y: 0, width: SettingsPanelView.width - 16, height: 64)
+    chart.frame = NSRect(x: 0, y: 0, width: SettingsPanelView.width - 16, height: 43)
     let slots = chart.intervalRects
     check(slots.count == days * 24, "\(days)-day chart keeps one slot per hour")
     check(slots.allSatisfy { $0.minX.isFinite && $0.width.isFinite && $0.width >= 0
         && $0.minX >= 0 && $0.maxX <= chart.bounds.width }, "\(days)-day slot geometry stays finite and inside panel")
 }
 let currentHourChart = CopyActivityChartView(days: 10, now: now, buckets: [(hour: activityHour, copies: Int.max)])
-currentHourChart.frame = NSRect(x: 0, y: 0, width: SettingsPanelView.width - 16, height: 64)
+currentHourChart.frame = NSRect(x: 0, y: 0, width: SettingsPanelView.width - 16, height: 43)
 let currentBars = currentHourChart.renderedBarRects
 check(currentBars.count == 1 && currentBars[0].midX > currentHourChart.bounds.width - 3
       && currentBars[0].maxX <= currentHourChart.bounds.width, "ten-day production geometry puts current activity at the visible right edge")
@@ -135,6 +135,7 @@ check(choices("copyActivityDays")?.titles == ["3 days", "5 days", "10 days"] && 
 check((choices("copyActivityDays")?.frame.width ?? 0) > 0 && choices("copyActivityDays")!.frame.maxX <= view.bounds.width,
       "native activity range dropdown fits the production panel")
 let chartBounds = view.activityChart!.bounds
+check(chartBounds.height == 43, "production activity chart is one-third shorter")
 let chartHourCount = view.activityChart!.days * 24
 check(chartBounds.width > CGFloat(chartHourCount - 1), "ten-day chart has nonnegative one-pixel hourly slots")
 let emptyChart = CopyActivityChartView(days: 5, now: now, buckets: [])
@@ -164,7 +165,7 @@ check(document.sectionHeaders.count == 4 && document.sectionHeaders.allSatisfy {
 }, "all four section strips span the full panel width")
 let sectionLabels = document.subviews.compactMap { $0 as? NSTextField }
     .filter { $0.accessibilityIdentifier().hasPrefix("section:") }
-check(sectionLabels.map(\.stringValue) == ["History", "Paste", "Limits", "Picker UI"], "strips label the four direct sections")
+check(sectionLabels.map(\.stringValue) == ["History", "Paste", "Limits", "Look and feel"], "strips label the four direct sections")
 check(zip(sectionLabels, document.sectionHeaders).allSatisfy { $1.contains($0.frame) }, "section labels fit inside shaded strips")
 let dropdowns = view.controls.compactMap { $0 as? PanelDropdown }
 check(Set(dropdowns.map { $0.frame.minX }).count == 1 && Set(dropdowns.map { $0.frame.width }).count == 1,
