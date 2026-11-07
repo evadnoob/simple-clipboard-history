@@ -31,11 +31,14 @@ final class PickerController: NSObject, NSWindowDelegate {
     private let monitor: ClipboardMonitor
     let model: PickerModel
     let view: PickerView
-    /// Smallest picker size: a few rows and the bar.
-    static let minimumSize = NSSize(width: 420, height: 200)
-    private static let widthKey = "pickerWidth"
+    /// A compact one-line picker and its bottom bar, also valid as a saved height cap.
+    static let minimumSize = NSSize(width: 280, height: PickerView.compactHeight)
+    private static let widthKey = "pickerManualWidth"
+    private static let presetKey = "pickerLastWidthPreset"
     private static let heightKey = "pickerHeight"
     private let defaults: UserDefaults
+    private let screenFrame: (() -> NSRect?)?
+    private var resizeStartSize: NSSize?
 
     private lazy var panel: FloatingPanel = {
         // An unflipped container holds the picker and, above it, the four corner squares that resize the panel.
@@ -46,7 +49,8 @@ final class PickerController: NSObject, NSWindowDelegate {
         for corner in [WindowCorner.bottomLeft, .bottomRight, .topLeft, .topRight] {
             let cornerView = WindowCornerView(corner: corner)
             cornerView.place(in: container)
-            cornerView.onResizeEnded = { [weak self] frame in self?.saveSize(frame.size) }
+            cornerView.onResizeStarted = { [weak self] frame in self?.resizeStartSize = frame.size }
+            cornerView.onResizeEnded = { [weak self] frame in self?.finishResize(frame) }
             container.addSubview(cornerView)
         }
         let panel = FloatingPanel(contentView: container, size: InterfaceStyle.pickerSize, resizable: true)
@@ -57,30 +61,77 @@ final class PickerController: NSObject, NSWindowDelegate {
 
     /// The size the user last gave the picker, or the default.
     var savedSize: NSSize {
-        let width = defaults.double(forKey: Self.widthKey)
+        let preset = settingsStore.settings.pickerWidth
+        let lastPreset = defaults.object(forKey: Self.presetKey) as? Int
+        let manual = defaults.double(forKey: Self.widthKey)
+        let width = lastPreset == preset && manual.isFinite && manual >= Self.minimumSize.width ? manual : Double(preset)
         let height = defaults.double(forKey: Self.heightKey)
-        guard width >= Self.minimumSize.width, height >= Self.minimumSize.height else { return InterfaceStyle.pickerSize }
-        return NSSize(width: width, height: height)
+        return NSSize(width: width, height: height.isFinite && height >= Self.minimumSize.height ? height : 10_000)
     }
 
-    func saveSize(_ size: NSSize) {
-        defaults.set(Double(size.width), forKey: Self.widthKey)
-        defaults.set(Double(size.height), forKey: Self.heightKey)
+    func saveSize(_ size: NSSize, widthChanged: Bool = true, heightChanged: Bool = true) {
+        // A temporarily compact height must never discard an otherwise valid manual width.
+        if widthChanged && size.width.isFinite && size.width >= Self.minimumSize.width {
+            defaults.set(Double(size.width), forKey: Self.widthKey)
+            defaults.set(settingsStore.settings.pickerWidth, forKey: Self.presetKey)
+        }
+        if heightChanged && size.height.isFinite && size.height >= Self.minimumSize.height {
+            defaults.set(Double(size.height), forKey: Self.heightKey)
+        }
+        resizeToContent()
     }
 
-    /// Edge resizes go through the system; corner resizes report through `onResizeEnded`.
+    private func resizeToContent(centered: Bool = false) {
+        let visible = screenFrame?() ?? (centered ? Self.screenWithMouse() : panel.screen ?? Self.screenWithMouse())?.visibleFrame
+        let available = NSSize(width: max(1, (visible?.width ?? 1440) - 40),
+                               height: max(1, (visible?.height ?? 900) - 40))
+        let saved = savedSize
+        panel.minSize = NSSize(width: min(Self.minimumSize.width, available.width),
+                               height: min(view.minimumContentHeight, available.height))
+        panel.maxSize = available
+        let size = NSSize(width: min(saved.width, available.width),
+                          height: view.desiredHeight(cap: saved.height, screenHeight: available.height))
+        var frame = NSRect(x: panel.frame.minX, y: panel.frame.maxY - size.height, width: size.width, height: size.height)
+        if centered, let visible {
+            frame.origin = NSPoint(x: floor(visible.midX - size.width / 2),
+                                   y: floor(min(visible.maxY - size.height - 20,
+                                                visible.midY - size.height / 2 + visible.height * 0.1)))
+        }
+        if let visible {
+            frame.origin.x = min(max(frame.minX, visible.minX + 20), visible.maxX - 20 - frame.width)
+            frame.origin.y = min(max(frame.minY, visible.minY + 20), visible.maxY - 20 - frame.height)
+        }
+        panel.setFrame(frame, display: true)
+        view.updateRowCount()
+    }
+
+    /// Compare against the start of either resize route, not the saved content-height cap.
+    private func finishResize(_ frame: NSRect) {
+        guard let start = resizeStartSize else { return }
+        resizeStartSize = nil
+        saveSize(frame.size, widthChanged: abs(frame.width - start.width) > 0.5,
+                 heightChanged: abs(frame.height - start.height) > 0.5)
+    }
+
+    func windowWillStartLiveResize(_ notification: Notification) {
+        resizeStartSize = panel.frame.size
+    }
+
     func windowDidEndLiveResize(_ notification: Notification) {
-        saveSize(panel.frame.size)
+        finishResize(panel.frame)
     }
 
-    init(store: ClipStore, settingsStore: SettingsStore, monitor: ClipboardMonitor, defaults: UserDefaults = .standard) {
+    init(store: ClipStore, settingsStore: SettingsStore, monitor: ClipboardMonitor, defaults: UserDefaults = .standard,
+         model: PickerModel? = nil, screenFrame: (() -> NSRect?)? = nil) {
         self.defaults = defaults
+        self.screenFrame = screenFrame
         self.store = store
         self.settingsStore = settingsStore
         self.monitor = monitor
-        model = PickerModel(search: { query, limit in (try? store.search(query, limit: limit)) ?? [] })
-        view = PickerView(model: model)
+        self.model = model ?? PickerModel(search: { query, limit in (try? store.search(query, limit: limit)) ?? [] })
+        view = PickerView(model: self.model)
         super.init()
+        view.onContentChanged = { [weak self] in self?.resizeToContent() }
         view.loadItems = { id in (try? store.items(for: id)) ?? [] }
         view.onAction = { [weak self] action in self?.handle(action) }
     }
@@ -92,14 +143,20 @@ final class PickerController: NSObject, NSWindowDelegate {
     }
 
     func open() {
+        prepareToOpen()
+        panel.makeKeyAndOrderFront(nil)
+        panel.makeFirstResponder(view)
+    }
+
+    /// Prepares the real panel without ordering it front; the harness uses this with synthetic rows and screens.
+    func prepareToOpen() {
         model.reset()
+        view.settings = settingsStore.settings
         view.recallVerb = settingsStore.settings.recallMode == .paste ? "paste" : "copy"
         model.alwaysPastePlainText = settingsStore.settings.alwaysPastePlainText
         view.updateRowCount()
         view.needsDisplay = true
-        panel.setFrame(Self.frame(for: savedSize, on: Self.screenWithMouse()), display: true)
-        panel.makeKeyAndOrderFront(nil)
-        panel.makeFirstResponder(view)
+        resizeToContent(centered: true)
     }
 
     func close() {

@@ -7,11 +7,13 @@ final class PickerView: NSView {
     let model: PickerModel
     /// Called with the model's answer to a key or a double-click.
     var onAction: ((PickerAction) -> Void)?
+    var onContentChanged: (() -> Void)?
     /// Loads the stored items of a clip for the preview.
     var loadItems: ((Int64) -> [[Representation]])?
     /// Shown in the bar: "paste" or "copy", what recall does with the clip.
     var recallVerb = "paste"
     var now: () -> Date = Date.init
+    var settings = Settings()
 
     private var previewCache: (id: Int64, preview: ClipPreview)?
     private var scrollRemainder: CGFloat = 0
@@ -29,9 +31,63 @@ final class PickerView: NSView {
 
     var chrome: PickerChrome { PickerChrome(box: bounds, previewOpen: model.previewOpen) }
 
-    /// Tells the model how many rows fit. Call after a size or preview change.
+    /// Actual consecutive lines, including blank lines; nontext stays one compact metadata row.
+    func contentLines(for clip: ClipSummary) -> [String] {
+        guard !clip.contentPreview.isEmpty else { return [clip.preview] }
+        return Array(clip.contentPreview.components(separatedBy: "\n").prefix(settings.pickerContentLines))
+    }
+
+    func rowHeight(at index: Int) -> CGFloat {
+        if case .filters = model.step { return InterfaceStyle.rowHeight }
+        guard model.rows.indices.contains(index) else { return InterfaceStyle.rowHeight }
+        return CGFloat(contentLines(for: model.rows[index]).count) * InterfaceStyle.lineHeight + CGFloat(settings.pickerDensity * 2)
+    }
+
+    /// Shared geometry for drawing, pointer hit testing, keyboard paging and accessibility.
+    var visibleRows: [(index: Int, rect: NSRect)] {
+        let first = model.step == .clips ? model.firstRow : model.firstFilterRow
+        let count = model.step == .clips ? model.rows.count : model.filterRows.count
+        var y = chrome.listRect.minY
+        var result: [(Int, NSRect)] = []
+        for index in first..<max(first, count) {
+            let height = rowHeight(at: index)
+            guard result.count < settings.maximumVisibleItems, y + height <= chrome.listRect.maxY else { break }
+            result.append((index, NSRect(x: 0, y: y, width: bounds.width, height: height)))
+            y += height
+        }
+        return result
+    }
+
+    static var compactHeight: CGFloat {
+        ceil(InterfaceStyle.lineHeight + CGFloat(Settings.pickerDensityChoices.min()! * 2)
+             + PickerChrome(box: .zero).barHeight + InterfaceStyle.gap)
+    }
+
+    /// Content height is a cap, never a fixed empty window. Reserve preview space only when requested.
+    func desiredHeight(cap: CGFloat, screenHeight: CGFloat) -> CGFloat {
+        let count = model.step == .clips ? model.rows.count : model.filterRows.count
+        let heights = (0..<count).map { rowHeight(at: $0) }
+        // Use the tallest page so moving through variable rows does not resize the window.
+        let body = heights.sorted(by: >).prefix(settings.maximumVisibleItems).reduce(0, +)
+        let empty = InterfaceStyle.lineHeight + CGFloat(settings.pickerDensity * 2)
+        let chromeHeight = chrome.barHeight + InterfaceStyle.gap
+        let content = max(empty, body) + chromeHeight + (model.previewOpen ? 180 : 0)
+        return min(max(content, minimumContentHeight), max(cap, minimumContentHeight), screenHeight)
+    }
+
+    var minimumContentHeight: CGFloat {
+        let count = model.step == .clips ? model.rows.count : model.filterRows.count
+        let tallest = (0..<count).map { rowHeight(at: $0) }.max()
+            ?? (InterfaceStyle.lineHeight + CGFloat(settings.pickerDensity * 2))
+        return ceil(tallest * (model.previewOpen ? 3 : 1) + chrome.barHeight + InterfaceStyle.gap + (model.previewOpen ? InterfaceStyle.rowHeight * 3 : 0))
+    }
+
     func updateRowCount() {
-        model.visibleRowCount = max(1, Int(floor(chrome.listRect.height / InterfaceStyle.rowHeight)))
+        model.showPasteSpecial = settings.showPasteSpecial
+        model.maximumVisibleItems = settings.maximumVisibleItems
+        model.rowHeight = { [weak self] in Double(self?.rowHeight(at: $0) ?? 1) }
+        model.viewportHeight = Double(chrome.listRect.height)
+        model.updateViewport()
     }
 
     override func layout() {
@@ -69,24 +125,33 @@ final class PickerView: NSView {
                              color: .secondaryLabelColor)
             return
         }
-        let numberWidth = InterfaceStyle.width(of: "9", font: InterfaceStyle.smallFont)
-        for position in 0..<model.visibleRowCount {
-            let index = model.firstRow + position
-            guard index < model.rows.count else { break }
+        for (position, entry) in visibleRows.enumerated() {
+            let index = entry.index, row = entry.rect
             let clip = model.rows[index]
-            let row = NSRect(x: rect.minX, y: rect.minY + CGFloat(position) * rowHeight, width: rect.width, height: rowHeight)
             if index == model.selectedIndex { InterfaceStyle.selectionFill(row) }
+            var textX = row.minX + gap
             if position < 9 {
-                InterfaceStyle.draw("\(position + 1)", in: NSRect(x: row.minX + gap, y: row.minY, width: numberWidth, height: rowHeight),
-                                 font: InterfaceStyle.smallFont, color: .tertiaryLabelColor)
+                InterfaceStyle.draw("\(position + 1)", in: NSRect(x: textX, y: row.minY, width: 10, height: row.height),
+                                    font: InterfaceStyle.smallFont, color: .tertiaryLabelColor)
             }
-            let detail = Self.rowDetail(clip, now: now())
-            let detailWidth = InterfaceStyle.width(of: detail, font: InterfaceStyle.smallFont)
-            InterfaceStyle.draw(detail, in: NSRect(x: row.maxX - gap - detailWidth, y: row.minY, width: detailWidth, height: rowHeight),
-                             font: InterfaceStyle.smallFont, color: .tertiaryLabelColor, alignment: .right)
-            let textX = row.minX + gap * 2 + numberWidth
-            InterfaceStyle.draw(clip.preview, highlighting: model.query, in: NSRect(x: textX, y: row.minY, width: max(0, row.maxX - gap * 2 - detailWidth - textX),
-                                                      height: rowHeight))
+            textX += 18
+            if settings.showTypeIcons {
+                let name = clip.kind == "image" ? "photo" : clip.kind == "files" ? "doc" : "doc.text"
+                NSImage(systemSymbolName: name, accessibilityDescription: clip.kind)?.draw(
+                    in: NSRect(x: textX, y: row.midY - 7, width: 14, height: 14),
+                    from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+                textX += 22
+            }
+            let detail = settings.showTimestamps ? Self.rowDetail(clip, now: now()) : ""
+            let detailWidth = min(row.width / 3, InterfaceStyle.width(of: detail, font: InterfaceStyle.smallFont))
+            InterfaceStyle.draw(detail, in: NSRect(x: row.maxX - gap - detailWidth, y: row.minY,
+                                width: detailWidth, height: row.height), font: InterfaceStyle.smallFont,
+                                color: .secondaryLabelColor, alignment: .right)
+            for (line, text) in contentLines(for: clip).enumerated() {
+                InterfaceStyle.draw(text, highlighting: model.query,
+                    in: NSRect(x: textX, y: row.minY + CGFloat(settings.pickerDensity) + CGFloat(line) * InterfaceStyle.lineHeight,
+                               width: max(0, row.maxX - gap * 2 - detailWidth - textX), height: InterfaceStyle.lineHeight))
+            }
         }
     }
 
@@ -98,10 +163,9 @@ final class PickerView: NSView {
                                                                height: rowHeight), color: .secondaryLabelColor)
             return
         }
-        for position in 0..<model.visibleRowCount {
-            let index = model.firstFilterRow + position
-            guard index < model.filterRows.count else { break }
-            let row = NSRect(x: rect.minX, y: rect.minY + CGFloat(position) * rowHeight, width: rect.width, height: rowHeight)
+        for entry in visibleRows {
+            let index = entry.index
+            let row = entry.rect
             switch model.filterRows[index] {
             case .heading(let group):
                 InterfaceStyle.draw(group.rawValue, in: row.insetBy(dx: gap, dy: 0), font: InterfaceStyle.smallFont,
@@ -165,7 +229,7 @@ final class PickerView: NSView {
     private func drawBar(in rect: NSRect) {
         let gap = InterfaceStyle.gap
         let hints = barHints
-        let hintsWidth = min(InterfaceStyle.width(of: hints, font: InterfaceStyle.smallFont), rect.width * 0.65)
+        let hintsWidth = min(InterfaceStyle.width(of: hints, font: InterfaceStyle.smallFont), rect.width)
         InterfaceStyle.draw(hints, in: NSRect(x: rect.maxX - hintsWidth, y: rect.minY, width: hintsWidth, height: rect.height),
                             font: InterfaceStyle.smallFont, color: .tertiaryLabelColor, alignment: .right)
         let statusWidth = max(0, rect.width - hintsWidth - gap)
@@ -180,11 +244,11 @@ final class PickerView: NSView {
         case .clips:
             let count = model.rows.count
             let shown = count >= PickerModel.resultLimit ? "\(count.formatted())+" : count.formatted()
-            if model.query.isEmpty { return "\(shown) clips" }
+            if model.query.isEmpty { return "" }
             return "\(shown) matching \"\(model.query)\""
         case .filters:
             let count = model.filterRows.filter { if case .filter = $0 { return true } else { return false } }.count
-            if model.filterQuery.isEmpty { return "\(count) filters" }
+            if model.filterQuery.isEmpty { return "" }
             return "\(count) filters matching \"\(model.filterQuery)\""
         }
     }
@@ -192,12 +256,11 @@ final class PickerView: NSView {
     /// The key hints at the right of the bar. "plain" and "formatted" swap with Always Paste Plain Text.
     var barHints: String {
         if case .filters = model.step { return "\u{21A9} \(recallVerb)  esc back" }
-        let alternate = model.alwaysPastePlainText ? "formatted" : "plain"
-        let main = "\u{21A9} \(recallVerb)\(model.alwaysPastePlainText ? " plain" : "")  \u{21E7}\u{21A9} \(alternate)  \u{2318}\u{21A9} filter"
-        if model.previewOpen, let clip = model.selectedClip {
-            return "\(clip.kind), \(Format.bytes(clip.byteSize))  \(main)  esc back"
-        }
-        return "\(main)  tab preview  esc close"
+        let main = "\u{21A9} \(recallVerb)\(model.alwaysPastePlainText ? " plain" : "")"
+        let special = settings.showPasteSpecial ? "  \u{21E7}\u{21A9} \(model.alwaysPastePlainText ? "formatted" : "plain")" : ""
+        let escape = model.previewOpen ? "back" : model.query.isEmpty ? "close" : "clear"
+        let extras = bounds.width >= 560 ? "  ⌘↩ filter  tab preview" : ""
+        return "\(main)\(special)\(extras)  esc \(escape)"
     }
 
     /// The end of the text that fits the width, so the end of a long query stays visible.
@@ -223,8 +286,11 @@ final class PickerView: NSView {
     }
 
     func perform(_ key: PickerKey) {
+        model.showPasteSpecial = settings.showPasteSpecial
         let action = model.handle(key)
+        onContentChanged?()
         updateRowCount()
+        NSAccessibility.post(element: self, notification: .selectedChildrenChanged)
         needsDisplay = true
         if action != .none { onAction?(action) }
     }
@@ -273,17 +339,40 @@ final class PickerView: NSView {
 
     /// The clip row (or in the filter step, the filter list row) under a point.
     func rowIndex(at point: NSPoint) -> Int? {
-        let rect = chrome.listRect
-        guard rect.contains(point) else { return nil }
-        let offset = Int(floor((point.y - rect.minY) / InterfaceStyle.rowHeight))
-        switch model.step {
-        case .clips:
-            let index = model.firstRow + offset
-            return index < model.rows.count ? index : nil
-        case .filters:
-            let index = model.firstFilterRow + offset
-            guard index < model.filterRows.count, case .filter = model.filterRows[index] else { return nil }
-            return index
+        guard let entry = visibleRows.first(where: { $0.rect.contains(point) }) else { return nil }
+        if case .filters = model.step, case .heading = model.filterRows[entry.index] { return nil }
+        return entry.index
+    }
+
+    override func isAccessibilityElement() -> Bool { false }
+    override func accessibilityRole() -> NSAccessibility.Role? { .list }
+    override func accessibilityLabel() -> String? { "Clipboard history" }
+    override func accessibilityChildren() -> [Any]? {
+        visibleRows.compactMap { entry -> PickerAccessibilityRow? in
+            let label: String
+            let selected: Bool
+            switch model.step {
+            case .clips:
+                let clip = model.rows[entry.index]
+                label = contentLines(for: clip).joined(separator: "\n") + ", " + clip.kind
+                selected = entry.index == model.selectedIndex
+            case .filters:
+                guard case .filter(let filter) = model.filterRows[entry.index] else { return nil }
+                label = filter.name + ", " + filter.summary
+                selected = entry.index == model.selectedFilterIndex
+            }
+            let row = PickerAccessibilityRow()
+            row.setAccessibilityParent(self)
+            row.setAccessibilityRole(.row)
+            row.setAccessibilityLabel(label)
+            row.setAccessibilitySelected(selected)
+            if let window { row.setAccessibilityFrame(window.convertToScreen(convert(entry.rect, to: nil))) }
+            row.press = { [weak self] in
+                guard let self else { return }
+                self.model.select(entry.index)
+                self.perform(.enter)
+            }
+            return row
         }
     }
 
@@ -303,4 +392,10 @@ final class PickerView: NSView {
         model.scroll(by: rows)
         needsDisplay = true
     }
+}
+
+/// Press recalls the row, matching a double-click; selection is exposed independently.
+private final class PickerAccessibilityRow: NSAccessibilityElement {
+    var press: (() -> Void)?
+    override func accessibilityPerformPress() -> Bool { press?(); return press != nil }
 }
