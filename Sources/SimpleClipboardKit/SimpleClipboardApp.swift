@@ -36,8 +36,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkey.register(settingsStore.settings.pickerHotkey)
         let statusItemController = StatusItemController(store: store, settingsStore: settingsStore, monitor: monitor,
                                                   picker: picker, hotkey: hotkey)
-        settingsStore.onChange = { [weak hotkey] settings in
+        settingsStore.onChange = { [weak hotkey, weak monitor] settings in
             if let hotkey, hotkey.status != .registered(settings.pickerHotkey) { hotkey.register(settings.pickerHotkey) }
+            monitor?.enforceRetention()
         }
         monitor.start()
         self.picker = picker

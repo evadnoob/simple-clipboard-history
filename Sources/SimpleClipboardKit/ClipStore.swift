@@ -11,6 +11,7 @@ struct ClipSummary: Equatable {
     var lastCopiedAt: Date
     var copyCount: Int
     var sourceAppName: String?
+    var contentPreview: String = ""
 }
 
 struct StoreStatistics: Equatable {
@@ -30,6 +31,9 @@ final class ClipStore {
     static let blobThreshold = 128 * 1024
     /// Characters of plain text indexed for search per clip.
     static let searchTextLimit = 64 * 1024
+    /// Preview decoding/scanning never exceeds this UTF-8 prefix, even for a single very long line.
+    static let contentPreviewByteLimit = 64 * 1024
+    private static let maintenanceBatchSize = 100
 
     let directory: URL
     private let database: SQLiteDatabase
@@ -67,9 +71,11 @@ final class ClipStore {
                 source_bundle_identifier TEXT,
                 kind TEXT NOT NULL,
                 preview TEXT NOT NULL,
+                content_preview TEXT NOT NULL DEFAULT '',
                 byte_size INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS clips_last_copied_at ON clips (last_copied_at);
+            CREATE INDEX IF NOT EXISTS clips_first_copied_at ON clips (first_copied_at);
             CREATE TABLE IF NOT EXISTS representations (
                 clip_id INTEGER NOT NULL REFERENCES clips (id) ON DELETE CASCADE,
                 item_index INTEGER NOT NULL,
@@ -84,6 +90,90 @@ final class ClipStore {
                 WHERE blob_file IS NOT NULL;
             CREATE VIRTUAL TABLE IF NOT EXISTS clip_search USING fts5 (body, tokenize = 'trigram');
             """)
+        let columns = try database.query("PRAGMA table_info(clips)") { $0.text(1) ?? "" }
+        if !columns.contains("content_preview") {
+            try database.execute("ALTER TABLE clips ADD COLUMN content_preview TEXT NOT NULL DEFAULT ''")
+        }
+        // Persisted counters avoid a full history SUM on every capture. Triggers also cover cascaded deletes.
+        try database.transaction {
+            try database.execute("""
+            CREATE TABLE IF NOT EXISTS clip_totals (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1), clip_count INTEGER NOT NULL, clip_bytes INTEGER NOT NULL
+            );
+            CREATE TRIGGER IF NOT EXISTS clips_total_insert AFTER INSERT ON clips BEGIN
+                UPDATE clip_totals SET clip_count = clip_count + 1, clip_bytes = clip_bytes + NEW.byte_size;
+            END;
+            CREATE TRIGGER IF NOT EXISTS clips_total_delete AFTER DELETE ON clips BEGIN
+                UPDATE clip_totals SET clip_count = clip_count - 1, clip_bytes = clip_bytes - OLD.byte_size;
+            END;
+            CREATE TRIGGER IF NOT EXISTS clips_total_resize AFTER UPDATE OF byte_size ON clips BEGIN
+                UPDATE clip_totals SET clip_bytes = clip_bytes + NEW.byte_size - OLD.byte_size;
+            END;
+            CREATE TABLE IF NOT EXISTS store_metadata (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
+            """)
+            // A legacy upgrade needs one metadata-only aggregate; ordinary reopen must not rescan history.
+            let seeded = try database.query("SELECT 1 FROM clip_totals WHERE singleton = 1") { $0.integer(0) }
+            if seeded.isEmpty {
+                try database.run("INSERT INTO clip_totals SELECT 1, count(*), coalesce(sum(byte_size), 0) FROM clips")
+            }
+        }
+    }
+
+    /// Migrates at most 100 previews, releasing the store lock between calls. Returns true when complete.
+    /// Call off the launch path; summaries retain their empty preview fallback until their batch commits.
+    /// The cursor commits with its previews, so a failed batch can safely resume after reopening.
+    @discardableResult
+    func backfillContentPreviewBatch() throws -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return try database.transaction {
+            let complete = try database.query("SELECT value FROM store_metadata WHERE key = 'content_preview_v1'") { $0.integer(0) }.first
+            guard complete != 1 else { return true }
+            let cursor = try database.query("SELECT value FROM store_metadata WHERE key = 'content_preview_cursor'") { $0.integer(0) }.first
+            let ids = try database.query(
+                "SELECT id FROM clips \(cursor == nil ? "" : "WHERE id > ?") ORDER BY id LIMIT \(Self.maintenanceBatchSize)",
+                cursor.map { [.integer($0)] } ?? []) { $0.integer(0) }
+            guard let last = ids.last else {
+                try database.run("INSERT OR REPLACE INTO store_metadata VALUES ('content_preview_v1', 1)")
+                try database.run("DELETE FROM store_metadata WHERE key = 'content_preview_cursor'")
+                return true
+            }
+            for id in ids {
+                let preview = try legacyContentPreview(id)
+                try database.run("UPDATE clips SET content_preview = ? WHERE id = ?", [.text(preview), .integer(id)])
+            }
+            try database.run("INSERT OR REPLACE INTO store_metadata VALUES ('content_preview_cursor', ?)", [.integer(last)])
+            return false
+        }
+    }
+
+    private func legacyContentPreview(_ id: Int64) throws -> String {
+        let statement = try database.prepare("""
+            SELECT item_index, substr(data, 1, ?), blob_file FROM representations
+            WHERE clip_id = ? AND type = 'public.utf8-plain-text' ORDER BY item_index, position
+            """)
+        try statement.bind([.integer(Int64(Self.contentPreviewByteLimit)), .integer(id)])
+        var prefix = Data()
+        var lastItem: Int64?
+        while prefix.count < Self.contentPreviewByteLimit, try statement.step() {
+            let item = statement.integer(0)
+            if item == lastItem { continue }
+            if lastItem != nil { prefix.append(10) }
+            lastItem = item
+            let remaining = Self.contentPreviewByteLimit - prefix.count
+            if let file = statement.text(2) {
+                // Preview bytes are nonessential: missing/unreadable blobs must not hide the history.
+                // Keep this catch local to file IO so SQLite read/update failures still propagate.
+                do {
+                    let handle = try FileHandle(forReadingFrom: blobDirectory.appendingPathComponent(file))
+                    defer { try? handle.close() }
+                    prefix.append(try handle.read(upToCount: remaining) ?? Data())
+                } catch { continue }
+            } else {
+                prefix.append((statement.blob(1) ?? Data()).prefix(remaining))
+            }
+        }
+        // Lossy prefix decoding retains valid text if the byte budget splits a UTF-8 scalar.
+        return Self.contentLines(String(decoding: prefix, as: UTF8.self))
     }
 
     // MARK: writing
@@ -107,10 +197,10 @@ final class ClipStore {
             }
             try database.run("""
                 INSERT INTO clips (content_hash, first_copied_at, last_copied_at, source_app_name,
-                    source_bundle_identifier, kind, preview, byte_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    source_bundle_identifier, kind, preview, content_preview, byte_size) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, [.text(hash), .real(date.timeIntervalSince1970), .real(date.timeIntervalSince1970),
                       .optionalText(clip.sourceAppName), .optionalText(clip.sourceBundleIdentifier),
-                      .text(clip.kind), .text(clip.preview), .integer(Int64(clip.byteSize))])
+                      .text(clip.kind), .text(clip.preview), .text(Self.capturedContentPreview(clip)), .integer(Int64(clip.byteSize))])
             let id = database.lastInsertedRowID
             for (itemIndex, item) in clip.items.enumerated() {
                 for (position, representation) in item.enumerated() {
@@ -158,14 +248,62 @@ final class ClipStore {
         try database.execute("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")
     }
 
+    /// Enforces count, age and total representation-byte limits, removing oldest clips first.
+    @discardableResult
+    func enforceRetention(countLimit: Int, maximumBytes: Int, retentionDays: Int, now: Date = Date()) throws -> Int {
+        lock.lock(); defer { lock.unlock() }
+        let cutoff = now.timeIntervalSince1970 - Double(max(0, retentionDays)) * 86_400
+        var removed = 0
+        // Delete age-expired clips first, including their bytes, before testing the other budgets.
+        while true {
+            let ids = try database.query("""
+                SELECT id FROM clips WHERE last_copied_at < ? ORDER BY last_copied_at, id LIMIT ?
+                """, [.real(cutoff), .integer(Int64(Self.maintenanceBatchSize))]) { $0.integer(0) }
+            guard !ids.isEmpty else { break }
+            try deleteLocked(ids)
+            removed += ids.count
+        }
+        let totals = try retentionTotals()
+        var count = totals.count
+        var bytes = totals.bytes
+        while count > max(0, countLimit) || bytes > Int64(max(0, maximumBytes)) {
+            let rows = try database.query("SELECT id, byte_size FROM clips ORDER BY last_copied_at, id LIMIT ?",
+                                          [.integer(Int64(Self.maintenanceBatchSize))]) { ($0.integer(0), $0.integer(1)) }
+            guard !rows.isEmpty else { break }
+            var ids: [Int64] = []
+            for (id, size) in rows {
+                guard count > max(0, countLimit) || bytes > Int64(max(0, maximumBytes)) else { break }
+                ids.append(id)
+                count -= 1
+                bytes -= size
+            }
+            try deleteLocked(ids)
+            removed += ids.count
+        }
+        return removed
+    }
+
+    private func retentionTotals() throws -> (count: Int, bytes: Int64) {
+        try database.query("SELECT clip_count, clip_bytes FROM clip_totals WHERE singleton = 1") {
+            (Int($0.integer(0)), $0.integer(1))
+        }.first ?? (0, 0)
+    }
+
     /// Deletes the least recently copied clips beyond `limit`. Returns how many were deleted.
     @discardableResult
     func enforceLimit(_ limit: Int) throws -> Int {
         lock.lock(); defer { lock.unlock() }
-        let ids = try database.query("SELECT id FROM clips ORDER BY last_copied_at DESC LIMIT -1 OFFSET ?",
-                                     [.integer(Int64(max(limit, 0)))]) { $0.integer(0) }
-        try deleteLocked(ids)
-        return ids.count
+        var excess = max(0, try retentionTotals().count - max(0, limit))
+        var removed = 0
+        while excess > 0 {
+            let ids = try database.query("SELECT id FROM clips ORDER BY last_copied_at, id LIMIT ?",
+                                         [.integer(Int64(min(excess, Self.maintenanceBatchSize)))]) { $0.integer(0) }
+            guard !ids.isEmpty else { break }
+            try deleteLocked(ids)
+            excess -= ids.count
+            removed += ids.count
+        }
+        return removed
     }
 
     private func deleteLocked(_ ids: [Int64]) throws {
@@ -199,19 +337,54 @@ final class ClipStore {
     // MARK: reading
 
     private static let summaryColumns = """
-        id, kind, preview, byte_size, first_copied_at, last_copied_at, copy_count, source_app_name
+        id, kind, preview, content_preview, byte_size, first_copied_at, last_copied_at, copy_count, source_app_name
         """
+
+    private static func capturedContentPreview(_ clip: CapturedClip) -> String {
+        var prefix = Data()
+        var hasTextItem = false
+        for item in clip.items {
+            guard prefix.count < contentPreviewByteLimit else { break }
+            guard let representation = item.first(where: { $0.type == "public.utf8-plain-text" }) else { continue }
+            if hasTextItem { prefix.append(10) }
+            hasTextItem = true
+            prefix.append(representation.data.prefix(contentPreviewByteLimit - prefix.count))
+        }
+        return contentLines(String(decoding: prefix, as: UTF8.self))
+    }
+
+    /// Five consecutive lines, 500 Characters each. CRLF is one Character/newline in Swift.
+    /// A line longer than the 64 KiB scan budget can hide later lines; no whole-input splitting is done.
+    static func contentLines(_ text: String) -> String {
+        let bounded = String(decoding: text.utf8.prefix(contentPreviewByteLimit), as: UTF8.self)
+        var lines: [String] = []
+        var line = ""
+        var characters = 0
+        for character in bounded {
+            if character.isNewline {
+                lines.append(line)
+                if lines.count == 5 { return lines.joined(separator: "\n") }
+                line = ""
+                characters = 0
+            } else if characters < 500 {
+                line.append(character)
+                characters += 1
+            }
+        }
+        lines.append(line)
+        return lines.joined(separator: "\n")
+    }
 
     private static func summary(_ row: SQLiteStatement) -> ClipSummary {
         ClipSummary(id: row.integer(0), kind: row.text(1) ?? "", preview: row.text(2) ?? "",
-                    byteSize: Int(row.integer(3)), firstCopiedAt: Date(timeIntervalSince1970: row.real(4)),
-                    lastCopiedAt: Date(timeIntervalSince1970: row.real(5)), copyCount: Int(row.integer(6)),
-                    sourceAppName: row.text(7))
+                    byteSize: Int(row.integer(4)), firstCopiedAt: Date(timeIntervalSince1970: row.real(5)),
+                    lastCopiedAt: Date(timeIntervalSince1970: row.real(6)), copyCount: Int(row.integer(7)),
+                    sourceAppName: row.text(8), contentPreview: row.text(3) ?? "")
     }
 
     func recent(limit: Int) throws -> [ClipSummary] {
         lock.lock(); defer { lock.unlock() }
-        return try database.query("SELECT \(Self.summaryColumns) FROM clips ORDER BY last_copied_at DESC LIMIT ?",
+        return try database.query("SELECT \(Self.summaryColumns) FROM clips ORDER BY last_copied_at DESC, id DESC LIMIT ?",
                                   [.integer(Int64(limit))], Self.summary)
     }
 
@@ -221,21 +394,21 @@ final class ClipStore {
         lock.lock(); defer { lock.unlock() }
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
-            return try database.query("SELECT \(Self.summaryColumns) FROM clips ORDER BY last_copied_at DESC LIMIT ?",
+            return try database.query("SELECT \(Self.summaryColumns) FROM clips ORDER BY last_copied_at DESC, id DESC LIMIT ?",
                                       [.integer(Int64(limit))], Self.summary)
         }
         if trimmed.count < 3 {
             return try database.query("""
                 SELECT \(Self.summaryColumns) FROM clips WHERE id IN
                     (SELECT rowid FROM clip_search WHERE body LIKE ? ESCAPE '\\')
-                ORDER BY last_copied_at DESC LIMIT ?
+                ORDER BY last_copied_at DESC, id DESC LIMIT ?
                 """, [.text("%" + Self.escapeLike(trimmed) + "%"), .integer(Int64(limit))], Self.summary)
         }
         let phrase = "\"" + trimmed.replacingOccurrences(of: "\"", with: "\"\"") + "\""
         return try database.query("""
             SELECT \(Self.summaryColumns) FROM clips WHERE id IN
                 (SELECT rowid FROM clip_search WHERE clip_search MATCH ?)
-            ORDER BY last_copied_at DESC LIMIT ?
+            ORDER BY last_copied_at DESC, id DESC LIMIT ?
             """, [.text(phrase), .integer(Int64(limit))], Self.summary)
     }
 
@@ -269,10 +442,13 @@ final class ClipStore {
 
     func statistics() throws -> StoreStatistics {
         lock.lock(); defer { lock.unlock() }
-        let totals = try database.query("SELECT count(*), coalesce(sum(byte_size), 0), min(first_copied_at) FROM clips") {
+        let totals = try database.query("""
+            SELECT clip_count, clip_bytes, (SELECT min(first_copied_at) FROM clips)
+            FROM clip_totals WHERE singleton = 1
+            """) {
             row in (Int(row.integer(0)), Int(row.integer(1)), row.isNull(2) ? nil : Date(timeIntervalSince1970: row.real(2)))
         }.first ?? (0, 0, nil)
-        let latest = try database.query("SELECT \(Self.summaryColumns) FROM clips ORDER BY last_copied_at DESC LIMIT 1",
+        let latest = try database.query("SELECT \(Self.summaryColumns) FROM clips ORDER BY last_copied_at DESC, id DESC LIMIT 1",
                                         [], Self.summary).first
         return StoreStatistics(clipCount: totals.0, clipBytes: totals.1, diskBytes: diskBytes(),
                                oldestCopiedAt: totals.2, latest: latest)

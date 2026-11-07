@@ -69,6 +69,9 @@ check(recent[0].copyCount == 2, "copy count increases")
 check(recent[0].sourceAppName == "Terminal", "source app is the latest one")
 check(recent[0].firstCopiedAt == start, "first copied date kept")
 check(try! store.items(for: firstID) == textClip("hello world").items, "items round-trip")
+let previewID = try! store.record(textClip("line one\n\nline three\nline four\nline five\nline six"), at: start.addingTimeInterval(15))
+let contentPreview = try! store.recent(limit: 10).first(where: { $0.id == previewID })!.contentPreview
+check(contentPreview == "line one\n\nline three\nline four\nline five", "content preview keeps five actual lines including blanks")
 
 // MARK: store: large data goes to a blob file and round-trips
 let large = Data((0..<(ClipStore.blobThreshold + 10)).map { UInt8($0 % 251) })
@@ -94,14 +97,14 @@ check(try! store.search("caption", limit: 10).map(\.id) == [largeID], "text of a
 
 // MARK: store: statistics
 var statistics = try! store.statistics()
-check(statistics.clipCount == 4, "statistics count")
-check(statistics.clipBytes == 11 + 11 + large.count + 7 + large.count, "statistics bytes sum clip sizes")
+check(statistics.clipCount == 5, "statistics count")
+check(statistics.clipBytes == 11 + 11 + large.count + 7 + large.count + textClip("line one\n\nline three\nline four\nline five\nline six").byteSize, "statistics bytes sum clip sizes")
 check(statistics.oldestCopiedAt == start, "statistics oldest")
 check(statistics.latest?.id == largeCopyID, "statistics latest")
 check(statistics.diskBytes > large.count, "disk bytes include the blob file")
 
 // MARK: store: retention deletes the least recently copied and their unused blob files
-check(try! store.enforceLimit(3) == 1, "limit deletes one clip")
+check(try! store.enforceLimit(3) == 2, "limit deletes least recently copied clips")
 check(try! store.items(for: secondID).isEmpty, "least recently copied clip deleted")
 check(try! store.search("second", limit: 10).isEmpty, "deleted clip removed from search")
 try! store.delete(largeID)
@@ -128,6 +131,293 @@ check(try! clearStore.recent(limit: 10).map(\.preview) == ["after clear"], "stor
 // MARK: store reopens the same file
 let reopened = try! ClipStore(directory: store.directory)
 check(try! reopened.recent(limit: 10).map(\.id) == [firstID], "history survives reopening")
+
+// MARK: contentLines bounded extraction regressions
+check(ClipStore.contentLines("") == "", "empty preview remains empty")
+check(ClipStore.contentLines("a\r\nb\r\nc\r\nd\r\ne\r\nf") == "a\nb\nc\nd\ne", "CRLF counts once")
+check(ClipStore.contentLines("\r\n\r\nx\r\n\r\nz\r\nignored") == "\n\nx\n\nz", "CRLF blank lines preserved")
+check(ClipStore.contentLines("a\rb\u{0085}c\u{2028}d\u{2029}e\nf") == "a\nb\nc\nd\ne", "Unicode and CR line separators")
+check(ClipStore.contentLines("a\n") == "a\n", "trailing blank line preserved")
+let longLine = String(repeating: "é", count: 700)
+check(ClipStore.contentLines(Array(repeating: longLine, count: 6).joined(separator: "\n")) ==
+      Array(repeating: String(repeating: "é", count: 500), count: 5).joined(separator: "\n"), "500 Characters per actual line")
+let boundaryPrefix = "a\nb\nc\nd\n" + String(repeating: "x", count: ClipStore.contentPreviewByteLimit - 9)
+check(ClipStore.contentLines(boundaryPrefix + "😀\nignored") == "a\nb\nc\nd\n" + String(repeating: "x", count: 500),
+      "split UTF8 scalar at budget does not erase preview")
+check(ClipStore.contentLines(String(repeating: "x", count: ClipStore.contentPreviewByteLimit + 1) + "\nlater") == String(repeating: "x", count: 500),
+      "scan budget omits lines after pathological first line")
+let defaultSummary = ClipSummary(id: 1, kind: "text", preview: "legacy", byteSize: 6, firstCopiedAt: start,
+                                 lastCopiedAt: start, copyCount: 1, sourceAppName: nil)
+check(defaultSummary.contentPreview == "", "summary default preserves original initializer labels")
+
+let contentStore = freshStore()
+let recordCRLF = try! contentStore.record(textClip("1\r\n\r\n3\r\n4\r\n5\r\n6"))
+check(try! contentStore.recent(limit: 1).first?.contentPreview == "1\n\n3\n4\n5", "record stores actual CRLF content lines")
+let recordBoundary = try! contentStore.record(textClip(boundaryPrefix + "😀"))
+check(try! contentStore.recent(limit: 1).first?.contentPreview == "a\nb\nc\nd\n" + String(repeating: "x", count: 500),
+      "record preview decoding is bounded and keeps a split UTF8 prefix")
+check(recordCRLF != recordBoundary, "different multiline records have distinct identities")
+let invalidUTF8 = Data([0x61, 0xff, 0xc3, 0x28, 0x0a, 0x62, 0x80])
+let invalidPreview = "a��(\nb�"
+try! contentStore.record(CapturedClip(items: [[Representation(type: textType, data: invalidUTF8)]]))
+check(try! contentStore.recent(limit: 1).first?.contentPreview == invalidPreview,
+      "arbitrary invalid UTF8 record preview preserves valid bytes with replacement characters")
+
+// MARK: legacy DB migration: empty previews must terminate, across multiple batches and reopen
+let legacyDirectory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("legacy-\(UUID().uuidString)")
+let legacyBlobs = legacyDirectory.appendingPathComponent("blobs")
+try! FileManager.default.createDirectory(at: legacyBlobs, withIntermediateDirectories: true)
+let legacyDB = try! SQLiteDatabase(path: legacyDirectory.appendingPathComponent("clips.sqlite").path)
+try! legacyDB.execute("""
+    CREATE TABLE clips (
+        id INTEGER PRIMARY KEY, content_hash TEXT NOT NULL UNIQUE,
+        first_copied_at REAL NOT NULL, last_copied_at REAL NOT NULL, copy_count INTEGER NOT NULL DEFAULT 1,
+        source_app_name TEXT, source_bundle_identifier TEXT, kind TEXT NOT NULL, preview TEXT NOT NULL, byte_size INTEGER NOT NULL
+    );
+    CREATE TABLE representations (
+        clip_id INTEGER NOT NULL REFERENCES clips(id) ON DELETE CASCADE, item_index INTEGER NOT NULL,
+        position INTEGER NOT NULL, type TEXT NOT NULL, data BLOB, blob_file TEXT, byte_size INTEGER NOT NULL,
+        PRIMARY KEY (clip_id, item_index, position)
+    ) WITHOUT ROWID;
+    """)
+let sparseBlob = legacyBlobs.appendingPathComponent("synthetic-plain-text")
+_ = FileManager.default.createFile(atPath: sparseBlob.path, contents: nil)
+let sparseHandle = try! FileHandle(forWritingTo: sparseBlob)
+try! sparseHandle.write(contentsOf: Data("blob one\r\n\r\nblob three\r\nblob four\r\nblob five\r\nignored".utf8))
+try! sparseHandle.truncate(atOffset: 64 * 1024 * 1024)
+try! sparseHandle.close()
+// A directory is an existing path that cannot be read as blob bytes, regardless of test-user permissions.
+let unreadableBlob = legacyBlobs.appendingPathComponent("unreadable-blob", isDirectory: true)
+try! FileManager.default.createDirectory(at: unreadableBlob, withIntermediateDirectories: true)
+do {
+    let handle = try FileHandle(forReadingFrom: unreadableBlob)
+    defer { try? handle.close() }
+    _ = try handle.read(upToCount: 10)
+    check(false, "unreadable blob fixture rejects file IO")
+} catch { check(true, "unreadable blob fixture rejects file IO") }
+try! legacyDB.transaction {
+    for id in 1...240 {
+        try legacyDB.run("INSERT INTO clips (id, content_hash, first_copied_at, last_copied_at, kind, preview, byte_size) VALUES (?, ?, 1, 1, 'text', 'old', 0)",
+                         [.integer(Int64(id)), .text("legacy-\(id)")])
+        if id == 5 { continue } // A clip with no plain-text representation.
+        let text: String
+        switch id {
+        case 3: text = "one\r\ntwo\r\nthree\r\nfour\r\nfive\r\nsix"
+        case 4: text = "\n\n\n\n\nlast"
+        case 6: text = boundaryPrefix + "😀"
+        default: text = ""
+        }
+        let blobName: String? = [2: "synthetic-plain-text", 8: "missing-blob", 9: "unreadable-blob"][id]
+        let bytes = id == 10 ? invalidUTF8 : Data(text.utf8)
+        try legacyDB.run("INSERT INTO representations VALUES (?, 0, 0, ?, ?, ?, ?)",
+                         [.integer(Int64(id)), .text(textType), blobName == nil ? .blob(bytes) : .null,
+                          .optionalText(blobName), .integer(id == 2 ? 64 * 1024 * 1024 : Int64(bytes.count))])
+    }
+    // Multiple items join with actual blank content lines, just like CapturedClip.plainText.
+    try legacyDB.run("INSERT INTO representations VALUES (7, 1, 0, ?, ?, NULL, 4)", [.text(textType), .blob(Data("next".utf8))])
+}
+let legacyStore = try! ClipStore(directory: legacyDirectory)
+check(try! legacyStore.recent(limit: 300).allSatisfy { $0.contentPreview.isEmpty }, "initialization does not migrate legacy payloads")
+check((try! legacyDB.query("SELECT value FROM store_metadata WHERE key LIKE 'content_preview%'") { $0.integer(0) }).isEmpty,
+      "initialization does not advance migration cursor or completion marker")
+check(try! legacyStore.statistics().clipCount == 240 && legacyStore.statistics().clipBytes == 0, "legacy counter seed matches metadata")
+check(try! legacyStore.backfillContentPreviewBatch() == false, "first bounded batch leaves more work")
+check((try! legacyDB.query("SELECT value FROM store_metadata WHERE key = 'content_preview_cursor'") { $0.integer(0) }) == [100],
+      "one batch commits exactly 100 ids")
+let midMigrationReopen = try! ClipStore(directory: legacyDirectory)
+check((try! legacyDB.query("SELECT value FROM store_metadata WHERE key = 'content_preview_cursor'") { $0.integer(0) }) == [100],
+      "reopen leaves partially migrated history untouched")
+check(try! midMigrationReopen.backfillContentPreviewBatch() == false, "second bounded batch resumes cursor")
+check(try! midMigrationReopen.backfillContentPreviewBatch() == false, "short final payload batch commits")
+check(try! midMigrationReopen.backfillContentPreviewBatch() == true, "empty keyset marks completion")
+let legacyPreviews = Dictionary(uniqueKeysWithValues: try! legacyStore.recent(limit: 300).map { ($0.id, $0.contentPreview) })
+check(legacyPreviews.count == 240, "legacy migration crosses two 100-row batch boundaries")
+check(legacyPreviews[1] == "", "legacy empty text migration terminates")
+check(legacyPreviews[2] == "blob one\n\nblob three\nblob four\nblob five", "legacy large blob uses bounded prefix with CRLF")
+check(legacyPreviews[3] == "one\ntwo\nthree\nfour\nfive", "legacy inline CRLF")
+check(legacyPreviews[4] == "\n\n\n\n", "legacy blank-only preview remains valid")
+check(legacyPreviews[5] == "", "legacy missing representation terminates")
+check(legacyPreviews[6] == "a\nb\nc\nd\n" + String(repeating: "x", count: 500), "legacy split UTF8 prefix retained")
+check(legacyPreviews[7] == "\nnext", "legacy multiple plain-text items preserve blank content")
+check(legacyPreviews[8] == "", "actual missing referenced blob does not abort migration")
+check(legacyPreviews[9] == "", "actual unreadable referenced blob does not abort migration")
+check(legacyPreviews[10] == invalidPreview, "legacy arbitrary invalid UTF8 decoded loss-tolerantly")
+check((try! legacyDB.query("SELECT blob_file FROM representations WHERE clip_id IN (8,9) ORDER BY clip_id") { $0.text(0) }) == ["missing-blob", "unreadable-blob"],
+      "unavailable blob references and representations remain intact")
+check((try! legacyDB.query("SELECT value FROM store_metadata WHERE key = 'content_preview_v1'") { $0.integer(0) }) == [1], "backfill completion persisted")
+// A trigger makes an accidental repeat of the backfill fail instead of silently succeeding.
+try! legacyDB.execute("CREATE TRIGGER forbid_preview_repeat BEFORE UPDATE OF content_preview ON clips BEGIN SELECT RAISE(ABORT, 'backfill repeated'); END;")
+let legacyReopened = try! ClipStore(directory: legacyDirectory)
+check(try! legacyReopened.recent(limit: 300).count == 240, "completed migration reopens without rewriting empty previews")
+check(try! legacyReopened.backfillContentPreviewBatch(), "completed marker skips preview updates including unavailable blobs on reopen")
+check(try! legacyReopened.statistics().clipCount == 240 && legacyReopened.statistics().clipBytes == 0, "seeded counters survive reopen")
+check(FileManager.default.fileExists(atPath: sparseBlob.path), "backfill leaves blob reference intact")
+try! legacyDB.execute("""
+    DROP TRIGGER forbid_preview_repeat;
+    DELETE FROM store_metadata WHERE key = 'content_preview_v1';
+    INSERT INTO store_metadata VALUES ('content_preview_cursor', 200);
+    UPDATE clips SET content_preview = 'resume pending' WHERE id > 200;
+    CREATE TRIGGER forbid_cursor_revisit BEFORE UPDATE OF content_preview ON clips WHEN OLD.id <= 200
+        BEGIN SELECT RAISE(ABORT, 'cursor revisited'); END;
+    """)
+try! legacyDB.execute("""
+    CREATE TRIGGER interrupt_preview_batch BEFORE UPDATE OF content_preview ON clips WHEN OLD.id = 215
+        BEGIN SELECT RAISE(ABORT, 'interrupted batch'); END;
+    """)
+do {
+    let interruptedStore = try ClipStore(directory: legacyDirectory)
+    try interruptedStore.backfillContentPreviewBatch()
+    check(false, "backfill interruption surfaces error")
+} catch {
+    check("\(error)".contains("interrupted batch"), "backfill interruption surfaces error")
+}
+check((try! legacyDB.query("SELECT value FROM store_metadata WHERE key = 'content_preview_cursor'") { $0.integer(0) }) == [200],
+      "failed backfill batch does not advance durable cursor")
+check((try! legacyDB.query("SELECT content_preview FROM clips WHERE id = 201") { $0.text(0) }) == ["resume pending"],
+      "failed backfill batch rolls back partial preview updates")
+try! legacyDB.execute("DROP TRIGGER interrupt_preview_batch")
+let resumedLegacy = try! ClipStore(directory: legacyDirectory)
+check(try! resumedLegacy.backfillContentPreviewBatch() == false, "interrupted batch resumes after reopen")
+check(try! resumedLegacy.recent(limit: 1).first?.contentPreview == "", "persisted keyset cursor resumes after interrupted migration")
+
+// MARK: production background scheduling: each batch yields a main-thread read/refresh opportunity
+try! legacyDB.execute("""
+    DROP TRIGGER forbid_cursor_revisit;
+    DELETE FROM store_metadata WHERE key LIKE 'content_preview%';
+    UPDATE clips SET content_preview = '';
+    """)
+let migrationPasteboard = NSPasteboard(name: NSPasteboard.Name("preview-tests-\(UUID().uuidString)"))
+let migrationQueue = DispatchQueue(label: "preview-tests", qos: .utility)
+migrationQueue.suspend()
+var migrationSettings = Settings()
+migrationSettings.retentionDays = 36_500
+let backgroundMonitor = ClipboardMonitor(pasteboard: migrationPasteboard, store: resumedLegacy,
+                                          settings: { migrationSettings }, previewQueue: migrationQueue)
+var stopAfterFirstBatch = true
+var firstBatchRefreshed = false
+var migrationFinished = false
+var refreshesOnMain = true
+var observedCursors: [Int64] = []
+backgroundMonitor.onChange = { [weak backgroundMonitor] in
+    refreshesOnMain = refreshesOnMain && Thread.isMainThread
+    // These UI-style reads must run between batches, without the migration lock held.
+    _ = try! resumedLegacy.recent(limit: 10)
+    let cursor = try! legacyDB.query("SELECT value FROM store_metadata WHERE key = 'content_preview_cursor'") { $0.integer(0) }.first
+    if let cursor, observedCursors.last != cursor { observedCursors.append(cursor) }
+    if cursor == 100 && stopAfterFirstBatch {
+        firstBatchRefreshed = true
+        backgroundMonitor?.stop()
+    }
+    if (try! legacyDB.query("SELECT value FROM store_metadata WHERE key = 'content_preview_v1'") { $0.integer(0) }) == [1] {
+        migrationFinished = true
+        backgroundMonitor?.stop()
+    }
+}
+func waitForMain(_ condition: () -> Bool) -> Bool {
+    let deadline = Date().addingTimeInterval(5)
+    while !condition(), Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.005)) }
+    return condition()
+}
+backgroundMonitor.start()
+check((try! legacyDB.query("SELECT value FROM store_metadata WHERE key LIKE 'content_preview%'") { $0.integer(0) }).isEmpty,
+      "monitor start enqueues migration without processing legacy history inline")
+migrationQueue.resume()
+check(waitForMain { firstBatchRefreshed }, "utility batch refresh reaches main thread")
+check(observedCursors == [100], "stop during refresh prevents scheduling a second batch")
+check((try! legacyDB.query("SELECT value FROM store_metadata WHERE key = 'content_preview_cursor'") { $0.integer(0) }) == [100],
+      "background batch persists cursor before UI refresh")
+stopAfterFirstBatch = false
+backgroundMonitor.start()
+check(waitForMain { migrationFinished }, "restart schedules remaining bounded batches through completion")
+check(observedCursors == [100, 200, 240], "each background batch yields an observable durable cursor")
+check(refreshesOnMain, "all background migration notifications arrive on main thread")
+check(try! resumedLegacy.recent(limit: 300).first(where: { $0.id == 10 })?.contentPreview == invalidPreview,
+      "background migration populates summaries without changing preview API")
+backgroundMonitor.stop()
+
+try! legacyDB.execute("DELETE FROM store_metadata WHERE key LIKE 'content_preview%'")
+let lifecycleQueue = DispatchQueue(label: "preview-lifecycle-tests", qos: .utility)
+lifecycleQueue.suspend()
+var lifecycleMonitor: ClipboardMonitor? = ClipboardMonitor(pasteboard: migrationPasteboard, store: resumedLegacy,
+                                                          settings: { migrationSettings }, previewQueue: lifecycleQueue)
+weak var weakLifecycleMonitor = lifecycleMonitor
+lifecycleMonitor?.start()
+lifecycleMonitor = nil
+check(weakLifecycleMonitor == nil, "queued migration and timers do not retain monitor")
+lifecycleQueue.resume()
+lifecycleQueue.sync {}
+check((try! legacyDB.query("SELECT value FROM store_metadata WHERE key LIKE 'content_preview%'") { $0.integer(0) }).isEmpty,
+      "deallocated monitor performs no queued batch and cannot create a task loop")
+migrationPasteboard.releaseGlobally()
+
+// MARK: deterministic mixed age, count and byte retention
+func counterMatchesHistory(_ store: ClipStore) -> Bool {
+    let db = try! SQLiteDatabase(path: store.directory.appendingPathComponent("clips.sqlite").path)
+    let values = try! db.query("SELECT clip_count, clip_bytes, (SELECT count(*) FROM clips), (SELECT coalesce(sum(byte_size),0) FROM clips) FROM clip_totals") {
+        ($0.integer(0), $0.integer(1), $0.integer(2), $0.integer(3))
+    }
+    return values.first.map { $0.0 == $0.2 && $0.1 == $0.3 } ?? false
+}
+let retentionCases: [(String, Int, Int, Int)] = [
+    ("age subtracts expired bytes before checking budget", 10, 40, 4),
+    ("age plus byte budget", 10, 20, 2),
+    ("age plus count budget", 3, 1000, 3),
+    ("age plus count and bytes", 3, 25, 2),
+    ("zero byte budget", 10, 0, 0),
+    ("zero count budget", 0, 1000, 0),
+    ("negative budgets treated as zero", -1, -1, 0)
+]
+for (label, limit, bytes, expectedCount) in retentionCases {
+    let target = freshStore()
+    let expired = try! target.record(textClip(String(repeating: "e", count: 100)), at: start.addingTimeInterval(-31 * 86_400))
+    var ids: [Int64] = []
+    for index in 1...4 { ids.append(try! target.record(textClip(String(repeating: "\(index)", count: 10)), at: start)) }
+    let removed = try! target.enforceRetention(countLimit: limit, maximumBytes: bytes, retentionDays: 30, now: start)
+    check(removed == 5 - expectedCount, "\(label): deletion count")
+    check(try! target.recent(limit: 10).map(\.id) == Array(ids.suffix(expectedCount).reversed()), "\(label): deterministic id ties keep newest")
+    check(try! target.items(for: expired).isEmpty, "\(label): expired data deleted")
+    check(counterMatchesHistory(target), "\(label): counters accurate")
+    check(try! target.enforceRetention(countLimit: limit, maximumBytes: bytes, retentionDays: 30, now: start) == 0, "\(label): repeated pass idempotent")
+}
+let cutoffStore = freshStore()
+let cutoffID = try! cutoffStore.record(textClip("at cutoff"), at: start.addingTimeInterval(-30 * 86_400))
+try! cutoffStore.record(textClip("before cutoff"), at: start.addingTimeInterval(-30 * 86_400 - 1))
+check(try! cutoffStore.enforceRetention(countLimit: 10, maximumBytes: 100, retentionDays: 30, now: start) == 1, "age cutoff is strict")
+check(try! cutoffStore.recent(limit: 10).map(\.id) == [cutoffID], "clip exactly at cutoff retained")
+let batchedStore = freshStore()
+var batchIDs: [Int64] = []
+for index in 0..<350 {
+    let text = String(format: "%010d", index)
+    batchIDs.append(try! batchedStore.record(textClip(text), at: index < 120 ? start.addingTimeInterval(-31 * 86_400) : start))
+}
+check(try! batchedStore.enforceRetention(countLimit: 105, maximumBytes: 900, retentionDays: 30, now: start) == 260, "age and byte eviction crosses multiple bounded batches")
+check(try! batchedStore.recent(limit: 400).map(\.id) == Array(batchIDs.suffix(90).reversed()), "batch retention preserves deterministic last 90")
+check(counterMatchesHistory(batchedStore), "batch retention counter totals")
+let batchReopened = try! ClipStore(directory: batchedStore.directory)
+check(try! batchReopened.enforceRetention(countLimit: 90, maximumBytes: 900, retentionDays: 30, now: start) == 0, "retention counters survive reopen")
+try! batchReopened.record(textClip(String(format: "%010d", 349)), at: start)
+check(counterMatchesHistory(batchReopened), "dedup does not add count or bytes")
+try! batchReopened.touch(batchIDs.last!, at: start)
+try! batchReopened.enforceLimit(2)
+check(counterMatchesHistory(batchReopened), "count-only eviction maintains counters")
+try! batchReopened.deleteAll()
+check(counterMatchesHistory(batchReopened), "deleteAll maintains counters")
+try! batchReopened.record(textClip("after deleteAll"), at: start)
+check(counterMatchesHistory(batchReopened), "record after deleteAll maintains counters")
+
+let sharedStore = freshStore()
+let sharedOld = try! sharedStore.record(largeClip, at: start.addingTimeInterval(-31 * 86_400))
+let sharedNew = try! sharedStore.record(largeCopy, at: start)
+let smallNew = try! sharedStore.record(textClip("small"), at: start.addingTimeInterval(1))
+let sharedFiles = sharedStore.directory.appendingPathComponent("blobs")
+check(try! sharedStore.enforceRetention(countLimit: 2, maximumBytes: large.count + 5, retentionDays: 30, now: start) == 1, "age subtraction respects shared-blob logical sizes")
+check(try! sharedStore.recent(limit: 10).map(\.id) == [smallNew, sharedNew], "shared blob surviving clips not overdeleted")
+check((try! FileManager.default.contentsOfDirectory(atPath: sharedFiles.path)).count == 1, "age eviction preserves referenced blob")
+check(try! sharedStore.items(for: sharedNew) == largeCopy.items, "shared blob readable after age eviction")
+check(try! sharedStore.search("caption", limit: 10).isEmpty && sharedOld != sharedNew, "age eviction removes expired search row")
+check(try! sharedStore.enforceRetention(countLimit: 2, maximumBytes: 5, retentionDays: 30, now: start) == 1, "byte eviction removes last blob owner")
+check((try! FileManager.default.contentsOfDirectory(atPath: sharedFiles.path)).isEmpty, "last retained blob reference removal deletes file")
+check(counterMatchesHistory(sharedStore), "shared-blob logical counters consistent")
 
 // MARK: format
 let now = Date(timeIntervalSince1970: 1_800_000_000)
@@ -201,6 +491,93 @@ monitor.noteOwnWrite(clip: try! monitorStore.recent(limit: 1)[0])
 let countBefore = try! monitorStore.statistics().clipCount
 monitor.poll()
 check(try! monitorStore.statistics().clipCount == countBefore, "own recall write not recorded again")
+
+// MARK: startup/hourly/settings retention uses the same observable monitor path
+let startupStore = freshStore()
+try! startupStore.record(textClip("expired before startup"), at: Date().addingTimeInterval(-100 * 86_400))
+let startupMonitor = ClipboardMonitor(pasteboard: pasteboard, store: startupStore, settings: { Settings() })
+var startupChanges = 0
+startupMonitor.onChange = { startupChanges += 1 }
+startupMonitor.start()
+check(try! startupStore.statistics().clipCount == 0, "startup retention runs immediately")
+check(startupChanges == 1, "startup retention notifies UI even without pasteboard changes")
+startupMonitor.start()
+check(startupChanges == 1, "start is idempotent and does not install another timer pair")
+startupMonitor.stop()
+startupMonitor.start()
+check(startupChanges == 2, "stop allows one clean restart")
+startupMonitor.stop()
+
+let failureStore = freshStore()
+let failureDate = min(start.addingTimeInterval(-31 * 86_400), Date().addingTimeInterval(-100 * 86_400))
+let expiredFailureID = try! failureStore.record(textClip("expired failure"), at: failureDate)
+let failureDB = try! SQLiteDatabase(path: failureStore.directory.appendingPathComponent("clips.sqlite").path)
+try! failureDB.execute("CREATE TRIGGER fail_retention BEFORE DELETE ON clips BEGIN SELECT RAISE(ABORT, 'injected retention failure'); END;")
+var failureSettings = Settings()
+let failureMonitor = ClipboardMonitor(pasteboard: pasteboard, store: failureStore, settings: { failureSettings })
+var failureChanges = 0
+failureMonitor.onChange = { failureChanges += 1 }
+check(failureMonitor.enforceRetention(now: start) == 0, "failed retention returns no successful deletions")
+if case .failed(let message)? = failureMonitor.current?.state {
+    check(message.contains("Retention failed:") && message.contains("injected retention failure"), "retention error surfaced in monitor state")
+} else { check(false, "retention error surfaced in monitor state") }
+check(failureChanges == 1, "failed retention notifies UI")
+check(counterMatchesHistory(failureStore), "failed delete transaction preserves counters")
+check(try! failureStore.recent(limit: 10).map(\.id) == [expiredFailureID], "failed retention preserves history")
+failureMonitor.start()
+if case .failed? = failureMonitor.current?.state { check(true, "startup failure visible") } else { check(false, "startup failure visible") }
+check(failureChanges == 2, "startup failure not swallowed")
+failureMonitor.stop()
+try! failureDB.execute("DROP TRIGGER fail_retention")
+// This is the same entry point the hourly timer and settings-change closure call.
+check(failureMonitor.enforceRetention(now: start) == 1 && failureChanges == 3, "subsequent retention pass deletes expired rows and refreshes UI")
+check(failureMonitor.current == nil, "successful maintenance retry clears failure when no clipboard event exists")
+try! failureStore.record(textClip("fresh hourly"), at: start)
+check(failureMonitor.enforceRetention(now: start.addingTimeInterval(31 * 86_400)) == 1 && failureChanges == 4,
+      "hourly-equivalent time advance expires history without new capture")
+try! failureStore.record(textClip("settings one"), at: start)
+let settingsSurvivor = try! failureStore.record(textClip("settings two"), at: start)
+failureSettings.historyLimit = 1
+check(failureMonitor.enforceRetention(now: start) == 1 && failureChanges == 5, "settings-change retention applies new count and refreshes UI")
+check(try! failureStore.recent(limit: 10).map(\.id) == [settingsSurvivor], "settings count pass keeps newest tied id")
+try! failureDB.execute("CREATE TRIGGER fail_capture_retention BEFORE DELETE ON clips BEGIN SELECT RAISE(ABORT, 'capture retention failed'); END;")
+pasteboard.clearContents()
+pasteboard.setString("new failing capture", forType: .string)
+failureMonitor.poll()
+if case .failed(let message)? = failureMonitor.current?.state {
+    check(message.contains("capture retention failed"), "capture retention failure surfaced")
+} else { check(false, "capture retention failure surfaced") }
+check(failureChanges == 6, "capture retention failure notifies UI")
+let genuineCaptureFailure = failureMonitor.current
+failureMonitor.enforceRetention(now: start)
+try! failureDB.execute("DROP TRIGGER fail_capture_retention")
+failureMonitor.enforceRetention(now: start)
+check(failureMonitor.current == genuineCaptureFailure, "maintenance recovery preserves a genuine clipboard capture failure")
+
+// A later clipboard event during a maintenance failure must win over any previously saved event.
+failureSettings.capturePaused = true
+pasteboard.clearContents()
+pasteboard.setString("paused before maintenance", forType: .string)
+failureMonitor.poll()
+let priorClipboardEvent = failureMonitor.current
+try! failureStore.record(textClip("expired again"), at: start.addingTimeInterval(-31 * 86_400))
+try! failureDB.execute("CREATE TRIGGER fail_retry BEFORE DELETE ON clips BEGIN SELECT RAISE(ABORT, 'retry failure'); END;")
+failureMonitor.enforceRetention(now: start)
+failureMonitor.enforceRetention(now: start)
+try! failureDB.execute("DROP TRIGGER fail_retry")
+failureMonitor.enforceRetention(now: start)
+check(failureMonitor.current == priorClipboardEvent, "repeated maintenance failures recover the exact prior clipboard event")
+try! failureStore.record(textClip("expired third"), at: start.addingTimeInterval(-31 * 86_400))
+try! failureDB.execute("CREATE TRIGGER fail_retry BEFORE DELETE ON clips BEGIN SELECT RAISE(ABORT, 'retry failure'); END;")
+failureMonitor.enforceRetention(now: start)
+pasteboard.clearContents()
+pasteboard.setString("new paused event", forType: .string)
+failureMonitor.poll()
+let latestClipboardCount = pasteboard.changeCount
+try! failureDB.execute("DROP TRIGGER fail_retry")
+failureMonitor.enforceRetention(now: start)
+check(failureMonitor.current?.state == .skipped(.paused) && failureMonitor.current?.changeCount == latestClipboardCount,
+      "maintenance recovery restores latest clipboard event rather than stale pre-error state")
 
 pasteboard.releaseGlobally()
 print("\(checks) checks, \(failures) failed")
