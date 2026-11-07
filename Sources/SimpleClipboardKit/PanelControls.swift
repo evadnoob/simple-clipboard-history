@@ -1,21 +1,22 @@
 import AppKit
 
-// The settings panel's controls: a checkbox, a row of choices and a text button. They follow noteapp's /import
-// controls (ImportWizardCheckbox, ImportWizardSegments and ImportWizardButton in noteapp
-// Sources/NoteApp/ImportWizardControls.swift at 617d7221). They draw themselves and never become first responder:
-// the panel view keeps the keyboard and gives each key to the focused control (Tab moves the focus).
+// Compact panel controls. The panel owns custom-control focus; dropdowns use native menu tracking.
 
 /// A control the panel can give the focus.
 class PanelControl: NSView {
     /// A fixed name for the control, for the focus order and for tests.
     let partName: String
+    var isEnabled = true { didSet { setAccessibilityEnabled(isEnabled); needsDisplay = true } }
     var isFocused = false { didSet { if isFocused != oldValue { needsDisplay = true } } }
     /// Called when a click lands on the control, so the panel moves the focus to it.
     var onFocusRequest: ((PanelControl) -> Void)?
+    var onNavigationKey: ((NSEvent) -> Void)?
 
     init(partName: String) {
         self.partName = partName
         super.init(frame: .zero)
+        setAccessibilityElement(true)
+        setAccessibilityIdentifier(partName)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -31,6 +32,7 @@ class PanelControl: NSView {
     func click(at point: NSPoint) {}
 
     override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
         onFocusRequest?(self)
         click(at: convert(event.locationInWindow, from: nil))
     }
@@ -45,6 +47,8 @@ final class PanelCheckbox: PanelControl {
         self.title = title
         self.isOn = isOn
         super.init(partName: partName)
+        setAccessibilityRole(.checkBox)
+        setAccessibilityLabel(title)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -58,7 +62,7 @@ final class PanelCheckbox: PanelControl {
         box.fill()
         InterfaceStyle.strokeBorder(box, color: .secondaryLabelColor)
         if isOn {
-            NSColor.labelColor.setStroke()
+            NSColor.controlAccentColor.setStroke()
             let mark = NSBezierPath()
             mark.lineWidth = 1.6
             mark.move(to: NSPoint(x: box.minX + side * 0.2, y: box.midY))
@@ -71,7 +75,11 @@ final class PanelCheckbox: PanelControl {
         if isFocused { InterfaceStyle.strokeFocus(bounds) }
     }
 
+    override func accessibilityValue() -> Any? { isOn ? 1 : 0 }
+    override func accessibilityPerformPress() -> Bool { guard isEnabled else { return false }; onFocusRequest?(self); toggle(); return true }
+
     func toggle() {
+        guard isEnabled else { return }
         isOn.toggle()
         onChange?(isOn)
     }
@@ -83,77 +91,6 @@ final class PanelCheckbox: PanelControl {
     }
 
     override func click(at point: NSPoint) { toggle() }
-}
-
-/// A row of choices with the selected one boxed and filled. Left and Right change the choice.
-final class PanelChoiceRow: PanelControl {
-    let titles: [String]
-    /// Text after the choices, for example a unit.
-    let suffix: String
-    var selectedIndex: Int? { didSet { needsDisplay = true } }
-    var onChange: ((Int) -> Void)?
-
-    init(partName: String, titles: [String], suffix: String = "", selectedIndex: Int?) {
-        self.titles = titles
-        self.suffix = suffix
-        self.selectedIndex = selectedIndex
-        super.init(partName: partName)
-    }
-
-    required init?(coder: NSCoder) { fatalError("not used") }
-
-    private var padding: CGFloat { InterfaceStyle.gap }
-    private var choiceWidths: [CGFloat] { titles.map { InterfaceStyle.width(of: $0) + padding * 2 } }
-    override var preferredWidth: CGFloat {
-        choiceWidths.reduce(0, +) + 4 + (suffix.isEmpty ? 0 : InterfaceStyle.gap + InterfaceStyle.width(of: suffix))
-    }
-
-    func choiceRects() -> [NSRect] {
-        var x: CGFloat = 2
-        return choiceWidths.map { width in
-            defer { x += width - 1 }
-            return NSRect(x: x, y: 1, width: width, height: bounds.height - 2)
-        }
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let rects = choiceRects()
-        for (index, rect) in rects.enumerated() where index != selectedIndex {
-            InterfaceStyle.strokeBorder(rect)
-            InterfaceStyle.draw(titles[index], in: rect, color: .secondaryLabelColor, alignment: .center)
-        }
-        // The selected choice last, so its darker border is not covered by a neighbor's.
-        if let selected = selectedIndex, selected < rects.count {
-            InterfaceStyle.selectionFill(rects[selected])
-            InterfaceStyle.strokeBorder(rects[selected], color: .labelColor)
-            InterfaceStyle.draw(titles[selected], in: rects[selected], alignment: .center)
-        }
-        if !suffix.isEmpty, let last = rects.last {
-            InterfaceStyle.draw(suffix, in: NSRect(x: last.maxX + InterfaceStyle.gap, y: 0,
-                                                   width: max(0, bounds.width - last.maxX - InterfaceStyle.gap), height: bounds.height),
-                                color: .secondaryLabelColor)
-        }
-        if isFocused { InterfaceStyle.strokeFocus(NSRect(x: 0, y: 0, width: (rects.last?.maxX ?? 0) + 2, height: bounds.height)) }
-    }
-
-    func select(_ index: Int) {
-        guard index >= 0, index < titles.count, index != selectedIndex else { return }
-        selectedIndex = index
-        onChange?(index)
-    }
-
-    override func handleKey(_ event: NSEvent) -> Bool {
-        let current = selectedIndex ?? -1
-        switch event.keyCode {
-        case 123: select(max(0, current - 1)); return true
-        case 124: select(current + 1); return true
-        default: return false
-        }
-    }
-
-    override func click(at point: NSPoint) {
-        if let index = choiceRects().firstIndex(where: { $0.contains(point) }) { select(index) }
-    }
 }
 
 /// A button: bordered, or with `isLink` a line of text. Space or Return presses it.
@@ -169,6 +106,8 @@ final class PanelButton: PanelControl {
         self.title = title
         self.isLink = isLink
         super.init(partName: partName)
+        setAccessibilityRole(.button)
+        setAccessibilityLabel(title)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -179,16 +118,17 @@ final class PanelButton: PanelControl {
 
     override func draw(_ dirtyRect: NSRect) {
         if isLink {
-            InterfaceStyle.draw(title, in: bounds.insetBy(dx: 3, dy: 0), color: textColor)
+            InterfaceStyle.draw(title, in: bounds.insetBy(dx: 3, dy: 0), color: isEnabled ? textColor : .disabledControlTextColor)
         } else {
             if isDefault { InterfaceStyle.selectionFill(bounds) }
             InterfaceStyle.strokeBorder(bounds, color: isDefault ? .labelColor : .secondaryLabelColor)
-            InterfaceStyle.draw(title, in: bounds, color: textColor, alignment: .center)
+            InterfaceStyle.draw(title, in: bounds, color: isEnabled ? textColor : .disabledControlTextColor, alignment: .center)
         }
         if isFocused { InterfaceStyle.strokeFocus(bounds) }
     }
 
-    func press() { onPress?() }
+    override func accessibilityPerformPress() -> Bool { guard isEnabled else { return false }; onFocusRequest?(self); press(); return true }
+    func press() { guard isEnabled else { return }; onPress?() }
 
     override func handleKey(_ event: NSEvent) -> Bool {
         guard event.keyCode == 49 || event.keyCode == 36 || event.keyCode == 76 else { return false }
@@ -197,4 +137,59 @@ final class PanelButton: PanelControl {
     }
 
     override func click(at point: NSPoint) { press() }
+}
+
+/// The popup itself provides native menu tracking, labels and accessibility actions.
+final class PanelDropdown: PanelControl {
+    override var isEnabled: Bool { didSet { popup.isEnabled = isEnabled } }
+    let popup = PanelPopupButton(frame: .zero, pullsDown: false)
+    let titles: [String]
+    var selectedIndex: Int { popup.indexOfSelectedItem }
+    var onChange: ((Int) -> Void)?
+    init(partName: String, label: String, titles: [String], selectedIndex: Int?) {
+        self.titles = titles
+        super.init(partName: partName)
+        setAccessibilityElement(false)
+        popup.addItems(withTitles: titles)
+        if let selectedIndex { popup.selectItem(at: selectedIndex) }
+        popup.controlSize = .small
+        popup.font = InterfaceStyle.font
+        popup.setAccessibilityRole(.popUpButton)
+        popup.setAccessibilityLabel(label)
+        popup.setAccessibilityIdentifier(partName)
+        popup.onPanelKey = { [weak self] event in
+            guard let self else { return }
+            self.onFocusRequest?(self)
+            self.onNavigationKey?(event)
+        }
+        popup.target = self
+        popup.action = #selector(changed)
+        addSubview(popup)
+    }
+    required init?(coder: NSCoder) { fatalError("not used") }
+    override var preferredWidth: CGFloat { 190 }
+    override func layout() { super.layout(); popup.frame = bounds }
+    @objc private func changed() { onFocusRequest?(self); onChange?(selectedIndex) }
+    func select(_ index: Int) {
+        guard isEnabled, titles.indices.contains(index), index != selectedIndex else { return }
+        popup.selectItem(at: index)
+        onChange?(index)
+    }
+    override func handleKey(_ event: NSEvent) -> Bool {
+        switch event.keyCode {
+        case 123, 126: select(max(0, selectedIndex - 1)); return true
+        case 124, 125: select(min(titles.count - 1, selectedIndex + 1)); return true
+        case 49, 36, 76: popup.performClick(nil); return true
+        default: return false
+        }
+    }
+    override func draw(_ dirtyRect: NSRect) { if isFocused { InterfaceStyle.strokeFocus(bounds) } }
+}
+
+final class PanelPopupButton: NSPopUpButton {
+    var onPanelKey: ((NSEvent) -> Void)?
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 48 || event.keyCode == 53 { onPanelKey?(event) }
+        else { super.keyDown(with: event) }
+    }
 }
