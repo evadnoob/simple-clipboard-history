@@ -1,143 +1,74 @@
 # Simple Clipboard
 
-A minimal clipboard history for macOS. It lives in the menu bar, records every copy, and lets you recall
-earlier copies. It has no Dock icon and no permanent window.
-
-Status: early development. See the milestones below.
-
-## Build and run
-
-Needs the Swift toolchain from the Xcode Command Line Tools. Xcode is not needed.
-
-```bash
-bash tools/run-tests.sh   # build and run every test harness
-bash bundle.sh            # build SimpleClipboard.app
-open SimpleClipboard.app
-```
-
-## Code signing
-
-`bundle.sh` signs the app with the code signing identity "evadnoob Local Code Signing" (override with
-`SIGNING_IDENTITY`). A fixed identity keeps the app's designated requirement the same across rebuilds, so macOS
-keeps its Accessibility permission. An ad-hoc signature changes with every build, and macOS then asks again.
-
-Create the identity once per machine; it is a self-signed certificate in the login keychain:
-
-```bash
-bash tools/create-signing-identity.sh
-```
-
-`security find-identity -p codesigning` lists it as `CSSMERR_TP_NOT_TRUSTED`. That is expected; `codesign` does not
-need a trusted certificate. Without the identity, `bundle.sh` prints a warning and signs ad-hoc.
-
-## Menu bar
-
-The menu bar item is a clipboard icon (the `list.clipboard` symbol), dimmed while capture is paused. Clicking it
-opens the settings panel under it. Clicking it again, Escape or a click elsewhere closes the panel.
-
-The panel has no menus or dropdowns. From the top:
-
-- Clipboard: the current clip's kind, size and source app, or why it was not recorded.
-- History: clip count, bytes copied, bytes on disk, the oldest clip and the last copy.
-- Checkboxes: Paste into the frontmost app, Always paste plain text, Pause capture.
-- Choice rows: Hotkey, Keep (clips), Largest clip (MB).
-- Ignored apps: a checkbox per ignored app (uncheck to record it again) and "+ Ignore <app>" for the app that was
-  in front when the panel opened.
-- Notices, when needed: missing Accessibility permission, or a hotkey that another app already uses. Clicking a
-  notice opens its fix.
-- Open Picker, Clear History and Quit.
-
-Every change applies at once. Clear History, and a Keep value smaller than the clip count, ask inside the panel
-before deleting. Tab moves between controls, Space toggles a checkbox and the arrow keys change a choice row.
-
-The source app of a clip is the frontmost app when the copy was seen. A copy made from a background process (for
-example `pbcopy` in a terminal) is attributed to whatever app was frontmost.
+A small, keyboard-first clipboard history app for macOS 13 or later. It lives in the menu bar, saves copies on disk, and pastes earlier clips into the app you are using.
 
 ## Picker
 
-The hotkey (default Shift-Command-V) opens the picker over the current app. It is a borderless box in the style of
-noteapp's `/import` popup: the clips newest first, and a bar at the bottom with the count and the key hints. There
-is no title row and no input field. Simple Clipboard does not become the active app, so the app you were in stays
-active and receives the paste.
+Press **Shift-Command-V**, then type to find a clip. There is no search box to focus.
 
-- Typing narrows the list to clips whose text contains what you typed (any case). The match is shown in bold in
-  each row, and the bar shows the count and the typed text.
-- Up and Down (or Control-N and Control-P), Page Up, Page Down, Home and End move the selection. The scroll wheel
-  scrolls.
-- Return, or a double-click, pastes the selected clip. Command-1 to Command-9 paste the numbered rows.
-- Shift-Return pastes plain text (or, with "Always paste plain text" on, keeps the formatting).
-- Command-Return opens the filters for the selected clip. See Filters below.
-- Tab opens a preview of the selected clip (text, image or file paths). Escape closes the preview.
-- Backspace deletes a typed character, Option-Backspace a word, Command-Backspace or Control-U all of it.
-- Escape, Command-W, Control-G, the hotkey again or a click outside closes the picker.
-- The edges and corners resize the picker, with the same corner squares and diagonal cursors as noteapp. The size
-  is remembered.
+![Clipboard picker](docs/screenshots/picker.png)
 
-Pasting puts the clip on the clipboard with every stored type, then sends Command-V (needs Accessibility
-permission). With "Paste into the frontmost app" off, the clip only goes on the clipboard.
+- **Up / Down:** select a clip.
+- **Return:** paste it, or restore it to the clipboard when automatic paste is off.
+- **Shift-Return:** use the alternate representation: plain text by default, or formatting when the default is plain text.
+- **Command-Return:** open Paste Special text filters, when enabled.
+- **Command-1 through Command-9:** recall a numbered clip.
+- **Tab:** preview the selected clip.
+- **Escape:** dismiss the preview, clear a search, or close the picker. In Paste Special, return to the clips first.
 
-Typing reads key events directly. Input methods that compose characters (for example Japanese) do not work yet.
+The picker shows actual lines of copied content. Its height follows the results, bounded by your visible-item setting and display. Resize its edges or corners to change the width or height cap.
 
-## Filters
+## Control panel
 
-Filters change a clip's text before pasting, like Pastebot's. Command-Return in the picker lists them under three
-headings; typing narrows the list and Return pastes the result as plain text. Escape goes back to the clips.
+Click the clipboard icon in the menu bar. The icon stays icon-only; history count and storage usage appear inside the panel.
 
-- Text & Writing: Convert to Plain Text, Single Line, Trim Whitespace, Normalize Whitespace, Convert to
-  Uppercase, Lowercase and Titlecase, Convert to Straight Punctuation, Sort Lines, Remove Duplicate Lines, Remove
-  List Numbering.
-- Developer: URL Encode and Decode, Base64 Encode and Decode, Hex Encode and Decode, HTML Entity Encode and
-  Decode, Escape for JSON String, Format JSON, Slugify, To snake_case, To camelCase.
-- Web & Markdown: Strip HTML, Markdown Link from URL, Markdown Blockquote, Extract URLs, Extract Email Addresses,
-  Create List, Wrap in Paragraph Tags.
+![Clipboard control panel](docs/screenshots/control-panel.png)
 
-A filter that does not apply (for example Base64 Decode on text that is not Base64) beeps and leaves the picker
-open. Filter results are not saved as new clips; the original clip moves to the top.
+- **History:** pause capture, launch at login, change the picker shortcut, and exclude apps.
+- **Paste:** automatic paste or clipboard-only recall, formatting or plain text, and Paste Special.
+- **Limits:** item count, total stored content size, retention age, and maximum size of one copy.
+- **Picker UI:** width, content lines, density, visible items, type icons, and timestamps.
 
-## What is recorded
+Settings apply immediately and persist across launches. Clear History asks for confirmation. **Import and Export are visible but not implemented.**
 
-The app checks the pasteboard change counter 4 times per second and reads the contents only after a change.
-Every pasteboard item and type is stored, so rich text, images and files paste back unchanged. A copy is skipped
-when:
+Screenshots use synthetic clipboard content rendered by the app's test harnesses.
 
-- it carries an nspasteboard.org marker such as `org.nspasteboard.ConcealedType` (password managers set these),
-- it was made in an app in Ignored Apps,
-- it is larger than the Largest Clip setting,
-- capture is paused.
+## Build and run
 
-Copying the same content again moves the existing clip to the top instead of storing it twice.
+Install the Xcode Command Line Tools. A full Xcode installation is not required.
 
-## Storage
+```bash
+bash bundle.sh
+open SimpleClipboard.app
+```
 
-`~/Library/Application Support/simple-clipboard/` (override with `SIMPLE_CLIPBOARD_DATA`):
+Automatic paste requires **System Settings > Privacy & Security > Accessibility** permission for Simple Clipboard. Without it, recall still restores the clipboard; press Command-V yourself. Some apps may reject simulated paste or particular clipboard representations.
 
-- `clips.sqlite`: clips, small representations and a trigram full-text index of clip text. WAL mode, and
-  memory-mapped reads, so pages live in the OS file cache instead of the app's heap.
-- `blobs/`: representations larger than 128 KB, one file per distinct content (named by SHA-256).
+### Stable local signing
 
-The least recently copied clips beyond the Keep History setting are deleted, with their unused blob files.
+To keep a consistent signing identity across rebuilds, create a local identity once per machine:
 
-Measured on macOS 27.2 with 3 clips: 0.09% CPU over 120 seconds idle, 15 MB memory footprint (`footprint`).
+```bash
+bash tools/create-signing-identity.sh
+bash bundle.sh
+```
 
-## Settings
+This adds a self-signed certificate and private key named `evadnoob Local Code Signing` to your login keychain. When macOS asks whether `codesign` may use the key, choose **Always Allow**. The certificate can appear as `CSSMERR_TP_NOT_TRUSTED`; it does not need system trust for local signing.
 
-All settings are in the settings panel. The app saves them in its preferences (`com.evadnoob.simple-clipboard`).
+`bundle.sh` uses that identity, or the value of `SIGNING_IDENTITY`. If the identity is missing, it warns and signs ad-hoc. Switching signing identities can require granting Accessibility again. Permission persistence across rebuilds still needs live validation.
 
-- Paste into the frontmost app (default on): sends Command-V after putting the clip on the clipboard. Needs
-  Accessibility permission. Turning it on without the permission shows the system prompt and opens the
-  Accessibility settings; until it is granted, clips go on the clipboard only.
-- Always paste plain text (default off).
-- Pause capture: stops recording until unchecked. The menu bar icon is dimmed.
-- Hotkey: Shift-Command-V (default), Option-Command-V, Control-Command-V, Shift-Option-Command-V or None.
-- Keep: 100, 500, 1,000 (default), 5,000 or 10,000 clips.
-- Largest clip: 5, 20 (default), 50 or 100 MB. Larger copies are not recorded.
-- Ignored apps.
+## Privacy and storage
 
-## Milestones
+Copies stay in `~/Library/Application Support/simple-clipboard/`, in SQLite and content-addressed blob files. Set `SIMPLE_CLIPBOARD_DATA` to use another directory. No cloud service is required.
 
-1. Risk check: clipboard polling, SQLite storage, both recall modes, and idle CPU and memory measurements.
-2. Capture and storage: history, duplicate removal, retention, concealed clips skipped, ignore list.
-3. Picker: a hotkey popup styled like noteapp's `/import` popup, with search at the bottom.
-4. Settings panel, plain text and filter pastes, picker resizing. Next: pinned clips, deleting a clip from the
-   picker.
-5. Later: paste rules per app, paste filters, sequential paste.
+Copies from excluded apps, copies marked concealed or transient, and oversized copies are skipped. These checks are not a guarantee that all sensitive content is excluded. The recorded source app is the app in front when the copy is detected. Copying identical content moves its existing entry to the top.
+
+Old history is removed according to count, age, and total-content-size limits. Total content size is not the same as disk usage: the database, search index, and other storage overhead also occupy space. Previews inspect at most the first 64 KiB of text; full stored clipboard representations are unchanged.
+
+## Development
+
+```bash
+bash tools/run-tests.sh
+```
+
+Tests use synthetic data. Offscreen rendering does not verify live focus, paste delivery, VoiceOver interaction, launch at login, or mouse resizing. Input methods that compose characters are not supported yet.
