@@ -266,10 +266,10 @@ final class SettingsPanelView: NSView {
         }
         add(clear, x: gap)
         y += controlHeight + 2
-        let importButton = PanelButton(partName: "import", title: "Import — Not implemented")
+        let importButton = PanelButton(partName: "import", title: "Import: Not implemented")
         importButton.isEnabled = false
         add(importButton, x: gap, width: 185)
-        let exportButton = PanelButton(partName: "export", title: "Export — Not implemented")
+        let exportButton = PanelButton(partName: "export", title: "Export: Not implemented")
         exportButton.isEnabled = false
         add(exportButton, x: 198, width: 184)
         y += controlHeight + 2
