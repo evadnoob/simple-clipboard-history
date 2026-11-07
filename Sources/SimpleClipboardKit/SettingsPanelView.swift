@@ -118,6 +118,7 @@ final class SettingsPanelView: NSView {
         settingsBody.subviews.forEach { $0.removeFromSuperview() }
         footer.subviews.forEach { $0.removeFromSuperview() }
         settingsBody.separators = []
+        settingsBody.sectionHeaders = []
         footer.separators = []
         controls = []
         var container = settingsBody
@@ -130,7 +131,7 @@ final class SettingsPanelView: NSView {
         let settings = content.settings
         var y: CGFloat = 0
 
-        func text(_ string: String, x: CGFloat, width: CGFloat, height: CGFloat = rowHeight, font: NSFont = InterfaceStyle.font,
+        func text(_ string: String, x: CGFloat, width: CGFloat, height: CGFloat = rowHeight, font: NSFont = InterfaceStyle.controlFont,
                   color: NSColor = .labelColor, alignment: NSTextAlignment = .left, identifier: String? = nil) {
             let label = NSTextField(labelWithString: string)
             label.font = font
@@ -157,11 +158,14 @@ final class SettingsPanelView: NSView {
             controls.append(control)
         }
 
+        func rowDivider() {
+            container.separators.append(NSRect(x: gap, y: y - 1, width: width - gap * 2, height: 1))
+        }
         func section(_ title: String) {
-            if y > 0 { separator() }
+            container.sectionHeaders.append(NSRect(x: 0, y: y, width: width, height: 20))
             text(title, x: gap, width: width - gap * 2, height: 20,
-                 font: .systemFont(ofSize: 11, weight: .semibold), color: .secondaryLabelColor)
-            y += 20
+                 font: .systemFont(ofSize: 11, weight: .semibold), identifier: "section:\(title)")
+            y += 22
         }
         func checkbox(_ name: String, _ title: String, _ on: Bool, _ change: @escaping (Bool) -> Void) {
             let control = PanelCheckbox(partName: name, title: title, isOn: on)
@@ -169,13 +173,15 @@ final class SettingsPanelView: NSView {
             if name == "paste" { control.toolTip = "When off, choosing an item only restores the clipboard; press Command-V to paste." }
             add(control, x: gap, height: rowHeight)
             y += rowHeight
+            rowDivider()
         }
         func dropdown(_ name: String, _ label: String, _ titles: [String], _ selected: Int?, _ change: @escaping (Int) -> Void) {
-            text(label, x: gap, width: labelWidth, height: controlHeight, color: .secondaryLabelColor)
+            text(label, x: gap, width: labelWidth, height: controlHeight, color: .labelColor)
             let control = PanelDropdown(partName: name, label: label, titles: titles, selectedIndex: selected)
             control.onChange = change
             add(control, x: valueX, width: width - valueX - gap)
             y += controlHeight
+            rowDivider()
         }
         func integerChoice(_ name: String, _ label: String, _ values: [Int], _ value: Int,
                            _ change: @escaping (Int) -> Void) {
@@ -183,7 +189,11 @@ final class SettingsPanelView: NSView {
             dropdown(name, label, choices.map { $0.formatted() }, choices.firstIndex(of: value)) { change(choices[$0]) }
         }
 
-        text(statusLine, x: gap, width: width - gap * 2, height: 28)
+        let status = NSImageView(frame: NSRect(x: gap, y: 8, width: 12, height: 12))
+        status.image = NSImage(systemSymbolName: settings.capturePaused ? "pause.circle.fill" : "checkmark.circle.fill", accessibilityDescription: nil)
+        status.contentTintColor = settings.capturePaused ? .secondaryLabelColor : .systemGreen
+        container.addSubview(status)
+        text(statusLine, x: gap + 18, width: width - gap * 2 - 18, height: 28)
         y += 28
         text("Clipboard: " + content.clipboardLine, x: gap, width: width - gap * 2,
              height: rowHeight, font: InterfaceStyle.smallFont, color: .secondaryLabelColor, identifier: "clipboardStatus")
@@ -259,17 +269,20 @@ final class SettingsPanelView: NSView {
         integerChoice("retention", "Retention (days)", Settings.retentionDayChoices, settings.retentionDays) { [weak self] value in
             self?.actions.update { $0.retentionDays = value }
         }
-        let clear = PanelButton(partName: "clearHistory", title: "Clear History…")
+        let clear = PanelButton(partName: "clearHistory", title: "Clear History…", isLink: true)
+        clear.symbolName = "trash"
         clear.onPress = { [weak self] in
             guard let self, let count = self.content?.statistics?.clipCount, count > 0 else { return }
             self.ask(.clearHistory(clipCount: count))
         }
         add(clear, x: gap)
         y += controlHeight + 2
-        let importButton = PanelButton(partName: "import", title: "Import: Not implemented")
+        let importButton = PanelButton(partName: "import", title: "Import: Not implemented", isLink: true)
+        importButton.symbolName = "square.and.arrow.down"
         importButton.isEnabled = false
         add(importButton, x: gap, width: 185)
-        let exportButton = PanelButton(partName: "export", title: "Export: Not implemented")
+        let exportButton = PanelButton(partName: "export", title: "Export: Not implemented", isLink: true)
+        exportButton.symbolName = "square.and.arrow.up"
         exportButton.isEnabled = false
         add(exportButton, x: 198, width: 184)
         y += controlHeight + 2
@@ -326,10 +339,12 @@ final class SettingsPanelView: NSView {
             add(delete, x: deleteX)
         } else {
             let pickerTitle = "Open Picker" + (content.hotkeyLabel.map { "  \($0)" } ?? "")
-            let open = PanelButton(partName: "openPicker", title: pickerTitle)
+            let open = PanelButton(partName: "openPicker", title: pickerTitle, isLink: true)
+            open.symbolName = "list.clipboard"
             open.onPress = { [weak self] in self?.actions.openPicker() }
             add(open, x: gap)
-            let quit = PanelButton(partName: "quit", title: "Quit")
+            let quit = PanelButton(partName: "quit", title: "Quit", isLink: true)
+            quit.symbolName = "power"
             quit.onPress = { [weak self] in self?.actions.quit() }
             add(quit, x: width - gap - quit.preferredWidth)
         }
@@ -416,7 +431,7 @@ final class SettingsPanelView: NSView {
     // MARK: drawing
 
     override func draw(_ dirtyRect: NSRect) {
-        NSColor.textBackgroundColor.setFill()
+        InterfaceStyle.panelBackground.setFill()
         bounds.fill()
         InterfaceStyle.strokeBorder(bounds, color: .tertiaryLabelColor)
     }
@@ -467,11 +482,21 @@ final class SettingsPanelView: NSView {
 }
 
 /// Flipped settings document and fixed footer share the panel's flat separator treatment.
-private final class PanelSectionView: NSView {
+final class PanelSectionView: NSView {
     var separators: [NSRect] = []
+    var sectionHeaders: [NSRect] = []
     override var isFlipped: Bool { true }
     override func draw(_ dirtyRect: NSRect) {
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(rect: bounds.insetBy(dx: 1, dy: 0)).addClip()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        InterfaceStyle.sectionBackground.setFill()
+        sectionHeaders.forEach { $0.fill() }
         NSColor.separatorColor.setFill()
+        for header in sectionHeaders {
+            NSRect(x: header.minX, y: header.minY, width: header.width, height: 1).fill()
+            NSRect(x: header.minX, y: header.maxY - 1, width: header.width, height: 1).fill()
+        }
         separators.forEach { $0.fill() }
     }
 }

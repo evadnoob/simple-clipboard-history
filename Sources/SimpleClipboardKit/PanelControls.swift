@@ -39,8 +39,10 @@ class PanelControl: NSView {
 }
 
 final class PanelCheckbox: PanelControl {
-    var title: String { didSet { needsDisplay = true } }
-    var isOn: Bool { didSet { needsDisplay = true } }
+    var title: String { didSet { button.title = title; setAccessibilityLabel(title) } }
+    var isOn: Bool { didSet { button.state = isOn ? .on : .off } }
+    override var isEnabled: Bool { didSet { button.isEnabled = isEnabled } }
+    let button = NSButton(checkboxWithTitle: "", target: nil, action: nil)
     var onChange: ((Bool) -> Void)?
 
     init(partName: String, title: String, isOn: Bool) {
@@ -49,29 +51,22 @@ final class PanelCheckbox: PanelControl {
         super.init(partName: partName)
         setAccessibilityRole(.checkBox)
         setAccessibilityLabel(title)
+        button.title = title
+        button.state = isOn ? .on : .off
+        button.controlSize = .small
+        button.font = InterfaceStyle.controlFont
+        button.setAccessibilityElement(false)
+        // The wrapper owns keyboard focus and accessibility; the native cell supplies checkbox drawing.
+        addSubview(button)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
-    private var side: CGFloat { ceil(InterfaceStyle.lineHeight * 0.9) }
-    override var preferredWidth: CGFloat { side + InterfaceStyle.gap + InterfaceStyle.width(of: title) + 6 }
+    override var preferredWidth: CGFloat { 22 + InterfaceStyle.width(of: title, font: InterfaceStyle.controlFont) }
+    override func layout() { super.layout(); button.frame = bounds }
+    override func hitTest(_ point: NSPoint) -> NSView? { super.hitTest(point) == nil ? nil : self }
 
     override func draw(_ dirtyRect: NSRect) {
-        let box = NSRect(x: 2, y: floor((bounds.height - side) / 2), width: side, height: side)
-        NSColor.textBackgroundColor.setFill()
-        box.fill()
-        InterfaceStyle.strokeBorder(box, color: .secondaryLabelColor)
-        if isOn {
-            NSColor.controlAccentColor.setStroke()
-            let mark = NSBezierPath()
-            mark.lineWidth = 1.6
-            mark.move(to: NSPoint(x: box.minX + side * 0.2, y: box.midY))
-            mark.line(to: NSPoint(x: box.minX + side * 0.42, y: box.maxY - side * 0.22))
-            mark.line(to: NSPoint(x: box.maxX - side * 0.2, y: box.minY + side * 0.22))
-            mark.stroke()
-        }
-        let textX = box.maxX + InterfaceStyle.gap
-        InterfaceStyle.draw(title, in: NSRect(x: textX, y: 0, width: max(0, bounds.width - textX), height: bounds.height))
         if isFocused { InterfaceStyle.strokeFocus(bounds) }
     }
 
@@ -97,6 +92,7 @@ final class PanelCheckbox: PanelControl {
 final class PanelButton: PanelControl {
     var title: String { didSet { needsDisplay = true } }
     var isLink: Bool
+    var symbolName: String?
     /// The button Return presses in a confirmation, drawn with a filled background.
     var isDefault = false { didSet { needsDisplay = true } }
     var textColor: NSColor = .labelColor
@@ -113,17 +109,22 @@ final class PanelButton: PanelControl {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     override var preferredWidth: CGFloat {
-        InterfaceStyle.width(of: title) + (isLink ? 6 : InterfaceStyle.gap * 3)
+        InterfaceStyle.width(of: title, font: InterfaceStyle.controlFont) + (isLink ? 6 : InterfaceStyle.gap * 3) + (symbolName == nil ? 0 : 18)
     }
 
     override func draw(_ dirtyRect: NSRect) {
-        if isLink {
-            InterfaceStyle.draw(title, in: bounds.insetBy(dx: 3, dy: 0), color: isEnabled ? textColor : .disabledControlTextColor)
-        } else {
+        let color: NSColor = !isEnabled ? .disabledControlTextColor : isDefault ? .alternateSelectedControlTextColor : textColor
+        if !isLink {
             if isDefault { InterfaceStyle.selectionFill(bounds) }
-            InterfaceStyle.strokeBorder(bounds, color: isDefault ? .labelColor : .secondaryLabelColor)
-            InterfaceStyle.draw(title, in: bounds, color: isEnabled ? textColor : .disabledControlTextColor, alignment: .center)
+            InterfaceStyle.strokeBorder(bounds, color: .separatorColor)
         }
+        var textRect = isLink ? bounds.insetBy(dx: 3, dy: 0) : bounds
+        if let symbolName {
+            InterfaceStyle.drawSymbol(symbolName, in: NSRect(x: textRect.minX, y: bounds.midY - 6, width: 12, height: 12), color: color)
+            textRect.origin.x += 18
+            textRect.size.width -= 18
+        }
+        InterfaceStyle.draw(title, in: textRect, font: InterfaceStyle.controlFont, color: color, alignment: isLink ? .left : .center)
         if isFocused { InterfaceStyle.strokeFocus(bounds) }
     }
 
@@ -153,7 +154,7 @@ final class PanelDropdown: PanelControl {
         popup.addItems(withTitles: titles)
         if let selectedIndex { popup.selectItem(at: selectedIndex) }
         popup.controlSize = .small
-        popup.font = InterfaceStyle.font
+        popup.font = InterfaceStyle.controlFont
         popup.setAccessibilityRole(.popUpButton)
         popup.setAccessibilityLabel(label)
         popup.setAccessibilityIdentifier(partName)

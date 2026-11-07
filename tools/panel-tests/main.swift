@@ -67,6 +67,44 @@ check(choices("largest")?.titles == ["5", "20", "50", "100"] && choices("largest
 check(button("openPicker")?.title == "Open Picker  \u{21E7}\u{2318}V", "open picker shows the hotkey")
 check(button("ignoreFrontmost")?.title == "+ Ignore kitty", "ignore the frontmost app")
 check(render().pixelsWide > 0, "panel draws")
+let document = view.scrollView.documentView as! PanelSectionView
+check(document.sectionHeaders.count == 4 && document.sectionHeaders.allSatisfy {
+    $0.minX == 0 && $0.width == SettingsPanelView.width && $0.height == 20
+}, "all four section strips span the full panel width")
+let sectionLabels = document.subviews.compactMap { $0 as? NSTextField }
+    .filter { $0.accessibilityIdentifier().hasPrefix("section:") }
+check(sectionLabels.map(\.stringValue) == ["History", "Paste", "Limits", "Picker UI"], "strips label the four direct sections")
+check(zip(sectionLabels, document.sectionHeaders).allSatisfy { $1.contains($0.frame) }, "section labels fit inside shaded strips")
+let dropdowns = view.controls.compactMap { $0 as? PanelDropdown }
+check(Set(dropdowns.map { $0.frame.minX }).count == 1 && Set(dropdowns.map { $0.frame.width }).count == 1,
+      "native dropdowns share a compact value column")
+check(dropdowns.allSatisfy { $0.frame.height == 24 && $0.popup.controlSize == .small && $0.popup.font == InterfaceStyle.controlFont },
+      "native dropdown geometry and typography stay compact")
+check(dropdowns.allSatisfy { control in document.separators.contains { $0.minY == control.frame.maxY - 1 && $0.height == 1 } },
+      "thin dividers separate setting rows without adding whitespace")
+check(checkbox("pause")?.button.cell is NSButtonCell && checkbox("pause")?.button.state == .on,
+      "checkbox uses a native checked cell")
+check(checkbox("pause")?.button.controlSize == .small && checkbox("pause")?.button.font == InterfaceStyle.controlFont,
+      "native checkbox typography and size are compact")
+check(button("clearHistory")?.symbolName == "trash" && button("openPicker")?.symbolName == "list.clipboard"
+      && button("import")?.symbolName == "square.and.arrow.down" && button("export")?.symbolName == "square.and.arrow.up",
+      "restrained action symbols use their actual meaning")
+check(checkbox("pause")?.hitTest(NSPoint(x: checkbox("pause")!.frame.midX, y: checkbox("pause")!.frame.midY)) === checkbox("pause"),
+      "native checkbox drawing leaves mouse handling with the panel control")
+for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+    view.appearance = NSAppearance(named: appearance)
+    let bitmap = render()
+    let scale = CGFloat(bitmap.pixelsWide) / view.bounds.width
+    func luminance(_ point: NSPoint) -> CGFloat {
+        let color = bitmap.colorAt(x: Int(point.x * scale), y: Int(point.y * scale))!.usingColorSpace(.deviceRGB)!
+        return (color.redComponent + color.greenComponent + color.blueComponent) / 3
+    }
+    let header = document.sectionHeaders[0]
+    let headerTone = luminance(NSPoint(x: 4, y: header.midY))
+    let bodyTone = luminance(NSPoint(x: 4, y: checkbox("pause")!.frame.midY))
+    check(abs(headerTone - bodyTone) > 0.04, "section strip visibly differs from body in \(appearance.rawValue)")
+}
+view.appearance = nil
 // MARK: checkboxes and choices apply at once
 checkbox("paste")?.toggle()
 check(settings.recallMode == .clipboard && checkbox("paste")?.isOn == false, "unchecking paste switches to clipboard")

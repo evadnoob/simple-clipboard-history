@@ -4,6 +4,9 @@ import AppKit
 enum InterfaceStyle {
     static let font = NSFont.systemFont(ofSize: 13, weight: .regular)
     static let smallFont = NSFont.systemFont(ofSize: 11, weight: .regular)
+    static let controlFont = NSFont.systemFont(ofSize: 12, weight: .regular)
+    static var panelBackground: NSColor { .windowBackgroundColor }
+    static var sectionBackground: NSColor { .quaternaryLabelColor }
     static var lineHeight: CGFloat { ceil(font.ascender - font.descender + font.leading) }
     static var rowHeight: CGFloat { lineHeight + 4 }
     static let gap: CGFloat = 8
@@ -45,6 +48,17 @@ enum InterfaceStyle {
         let height = ceil(font.ascender - font.descender)
         let target = NSRect(x: rect.minX, y: rect.minY + floor((rect.height - height) / 2), width: rect.width, height: height)
         attributed.draw(with: target, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+    }
+
+    static func drawSymbol(_ name: String, in rect: NSRect, color: NSColor = .labelColor) {
+        guard let symbol = NSImage(systemSymbolName: name, accessibilityDescription: nil) else { return }
+        let tinted = NSImage(size: rect.size, flipped: false) { bounds in
+            symbol.draw(in: bounds)
+            color.setFill()
+            bounds.fill(using: .sourceIn)
+            return true
+        }
+        tinted.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
     }
 
     static func selectionFill(_ rect: NSRect) {
@@ -99,7 +113,7 @@ struct PickerChrome {
     }
 
     func draw() {
-        NSColor.textBackgroundColor.setFill()
+        InterfaceStyle.panelBackground.setFill()
         box.fill()
         InterfaceStyle.strokeBorder(box, color: .tertiaryLabelColor)
         NSColor.separatorColor.setFill()

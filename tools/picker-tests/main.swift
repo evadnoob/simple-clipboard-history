@@ -578,17 +578,51 @@ let hotkey = GlobalHotkey {}
 hotkey.register(.none)
 check(hotkey.status == .off, "none registers nothing")
 
+// MARK: flat row structure and summary-only symbols
+check(PickerView.symbolName(for: clip(301, "https://developer.apple.com/documentation/appkit")) == "link", "web links have a link symbol")
+check(PickerView.symbolName(for: clip(302, "Notes\nhttps://example.com")) == "doc.text", "embedded URL does not relabel text content")
+check(PickerView.symbolName(for: clip(303, "http instructions")) == "doc.text", "ordinary text is not mistaken for a link")
+check(PickerView.symbolName(for: clip(304, "file:///tmp/synthetic.txt")) == "doc.text", "file URL text does not claim stored file representations")
+var symbolImage = clip(305, "Image (PNG) · 640 × 480")
+symbolImage.kind = "image"
+symbolImage.contentPreview = ""
+var symbolFiles = clip(306, "2 files · review.txt, notes.txt")
+symbolFiles.kind = "files"
+symbolFiles.contentPreview = ""
+check(PickerView.symbolName(for: symbolImage) == "photo" && PickerView.symbolName(for: symbolFiles) == "doc.on.doc", "image and stored file symbols are distinct")
+let structureModel = PickerModel(search: { _, _ in [clip(307, "First\n\nThird"), symbolImage, symbolFiles] })
+let structureView = PickerView(model: structureModel)
+structureModel.reset()
+structureView.setFrameSize(NSSize(width: 460, height: structureView.desiredHeight(cap: 600, screenHeight: 800)))
+var rowLoads = 0
+structureView.loadItems = { _ in rowLoads += 1; return [] }
+check(structureView.visibleRows.count == 3 && structureView.visibleRows.allSatisfy {
+    $0.rect.minX == 1 && $0.rect.maxX == structureView.bounds.maxX - 1
+}, "selection and content rows preserve the square outer outline")
+check(structureView.visibleRows.allSatisfy {
+    let divider = PickerView.rowDivider(in: $0.rect)
+    return divider.height == 1 && divider.maxY == $0.rect.maxY && $0.rect.contains(divider)
+}, "row dividers are thin and stay inside variable-height rows")
+check(structureView.contentLines(for: symbolImage).count == 1 && structureView.contentLines(for: symbolFiles).count == 1,
+      "nontext summaries remain one compact metadata row")
+_ = render(structureView)
+check(rowLoads == 0, "list drawing and kind symbols never load representations")
+
 // MARK: snapshots for a visual check (only with PICKER_SNAPSHOT_DIRECTORY set)
 if let directory = ProcessInfo.processInfo.environment["PICKER_SNAPSHOT_DIRECTORY"] {
     // Synthetic only: screenshot generation must never expose clipboard history.
     try! FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+    var imageFixture = symbolImage
+    imageFixture.id = 203
+    var fileFixture = symbolFiles
+    fileFixture.id = 206
     let fixtures = [
         clip(201, "Design review notes\nKeep the menu bar simple."),
         clip(202, "https://developer.apple.com/documentation/appkit"),
-        clip(203, "Meeting agenda\nReview keyboard shortcuts\nConfirm release checklist"),
+        imageFixture,
         clip(204, "swift build -c release --product SimpleClipboard"),
         clip(205, "Thanks for the update. I will review the changes today."),
-        clip(206, "Shopping list\nCoffee\nBread\nApples"),
+        fileFixture,
         clip(207, "# Release checklist\nRun tests\nReview settings\nVerify paste"),
         clip(208, "A small clipboard history, one shortcut away.")
     ]

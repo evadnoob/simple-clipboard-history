@@ -52,7 +52,7 @@ final class PickerView: NSView {
         for index in first..<max(first, count) {
             let height = rowHeight(at: index)
             guard result.count < settings.maximumVisibleItems, y + height <= chrome.listRect.maxY else { break }
-            result.append((index, NSRect(x: 0, y: y, width: bounds.width, height: height)))
+            result.append((index, NSRect(x: 1, y: y, width: bounds.width - 2, height: height)))
             y += height
         }
         return result
@@ -131,35 +131,30 @@ final class PickerView: NSView {
             let selected = index == model.selectedIndex
             let foreground = Self.rowForeground(selected: selected)
             if selected { InterfaceStyle.selectionFill(row) }
-            var textX = row.minX + gap
-            if position < 9 {
-                InterfaceStyle.draw("\(position + 1)", in: NSRect(x: textX, y: row.minY, width: 10, height: row.height),
-                                    font: InterfaceStyle.smallFont, color: selected ? foreground : .tertiaryLabelColor)
+            else {
+                NSColor.separatorColor.setFill()
+                Self.rowDivider(in: row).fill()
             }
-            textX += 18
+            var textX = row.minX + gap
+            let numberWidth: CGFloat = 16
+            if position < 9 {
+                InterfaceStyle.draw("\(position + 1)", in: NSRect(x: row.maxX - gap - numberWidth, y: row.minY, width: numberWidth, height: row.height),
+                                    font: InterfaceStyle.smallFont, color: selected ? foreground : .secondaryLabelColor, alignment: .right)
+            }
             if settings.showTypeIcons {
-                let name = clip.kind == "image" ? "photo" : clip.kind == "files" ? "doc" : "doc.text"
-                if let symbol = NSImage(systemSymbolName: name, accessibilityDescription: clip.kind) {
-                    let tinted = NSImage(size: NSSize(width: 14, height: 14), flipped: false) { bounds in
-                        symbol.draw(in: bounds)
-                        foreground.setFill()
-                        bounds.fill(using: .sourceIn)
-                        return true
-                    }
-                    tinted.draw(in: NSRect(x: textX, y: row.midY - 7, width: 14, height: 14),
-                                from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
-                }
-                textX += 22
+                InterfaceStyle.drawSymbol(Self.symbolName(for: clip),
+                    in: NSRect(x: textX, y: row.midY - 8, width: 16, height: 16), color: foreground)
+                textX += 28
             }
             let detail = settings.showTimestamps ? Self.rowDetail(clip, now: now()) : ""
             let detailWidth = min(row.width / 3, InterfaceStyle.width(of: detail, font: InterfaceStyle.smallFont))
-            InterfaceStyle.draw(detail, in: NSRect(x: row.maxX - gap - detailWidth, y: row.minY,
+            InterfaceStyle.draw(detail, in: NSRect(x: row.maxX - gap * 2 - numberWidth - detailWidth, y: row.minY,
                                 width: detailWidth, height: row.height), font: InterfaceStyle.smallFont,
                                 color: selected ? foreground : .secondaryLabelColor, alignment: .right)
             for (line, text) in contentLines(for: clip).enumerated() {
                 InterfaceStyle.draw(text, highlighting: model.query,
                     in: NSRect(x: textX, y: row.minY + CGFloat(settings.pickerDensity) + CGFloat(line) * InterfaceStyle.lineHeight,
-                               width: max(0, row.maxX - gap * 2 - detailWidth - textX), height: InterfaceStyle.lineHeight),
+                               width: max(0, row.maxX - gap * 3 - numberWidth - detailWidth - textX), height: InterfaceStyle.lineHeight),
                     color: foreground)
             }
         }
@@ -194,6 +189,21 @@ final class PickerView: NSView {
                                     color: foreground)
             }
         }
+    }
+
+    static func rowDivider(in row: NSRect) -> NSRect {
+        NSRect(x: row.minX + InterfaceStyle.gap, y: row.maxY - 1, width: row.width - InterfaceStyle.gap * 2, height: 1)
+    }
+
+    /// Symbols use only the bounded summary, never loading stored representations while drawing rows.
+    static func symbolName(for clip: ClipSummary) -> String {
+        if clip.kind == "image" { return "photo" }
+        if clip.kind == "files" { return "doc.on.doc" }
+        let firstLine = (clip.contentPreview.isEmpty ? clip.preview : clip.contentPreview).prefix(2048)
+            .split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
+        if let url = URL(string: firstLine.trimmingCharacters(in: .whitespaces)),
+           ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil { return "link" }
+        return "doc.text"
     }
 
     /// Custom-drawn rows must explicitly use the system's selected foreground over blue selection.
@@ -249,7 +259,7 @@ final class PickerView: NSView {
         let hints = barHints
         let hintsWidth = min(InterfaceStyle.width(of: hints, font: InterfaceStyle.smallFont), rect.width)
         InterfaceStyle.draw(hints, in: NSRect(x: rect.maxX - hintsWidth, y: rect.minY, width: hintsWidth, height: rect.height),
-                            font: InterfaceStyle.smallFont, color: .tertiaryLabelColor, alignment: .right)
+                            font: InterfaceStyle.smallFont, color: .secondaryLabelColor, alignment: .right)
         let statusWidth = max(0, rect.width - hintsWidth - gap)
         let status = Self.tail(of: barStatus, fitting: statusWidth, font: InterfaceStyle.smallFont)
         InterfaceStyle.draw(status, in: NSRect(x: rect.minX, y: rect.minY, width: statusWidth, height: rect.height),
