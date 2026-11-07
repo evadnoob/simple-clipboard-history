@@ -6,7 +6,7 @@ import AppKit
 class PanelControl: NSView {
     /// A fixed name for the control, for the focus order and for tests.
     let partName: String
-    var isEnabled = true { didSet { setAccessibilityEnabled(isEnabled); needsDisplay = true } }
+    var isEnabled = true { didSet { setAccessibilityEnabled(isEnabled); updateEnabledState(); needsDisplay = true } }
     var isFocused = false { didSet { if isFocused != oldValue { needsDisplay = true } } }
     /// Called when a click lands on the control, so the panel moves the focus to it.
     var onFocusRequest: ((PanelControl) -> Void)?
@@ -25,6 +25,7 @@ class PanelControl: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     var preferredWidth: CGFloat { 0 }
+    func updateEnabledState() {}
 
     /// True when the control used the key.
     func handleKey(_ event: NSEvent) -> Bool { false }
@@ -185,6 +186,64 @@ final class PanelDropdown: PanelControl {
         }
     }
     override func draw(_ dirtyRect: NSRect) { if isFocused { InterfaceStyle.strokeFocus(bounds) } }
+}
+
+final class PanelIntegerField: PanelControl {
+    let label: String
+    let field = NSTextField(string: "")
+    var onTab: (() -> Void)?
+    var onCommit: ((Int) -> Void)?
+    private var acceptedValue: Int
+    private var dispatchedValue: Int?
+
+    init(partName: String, label: String, value: Int) {
+        self.label = label
+        self.acceptedValue = value
+        super.init(partName: partName)
+        setAccessibilityRole(.textField)
+        setAccessibilityLabel(label)
+        field.stringValue = String(value)
+        field.isBezeled = true
+        field.bezelStyle = .roundedBezel
+        field.controlSize = .small
+        field.font = InterfaceStyle.controlFont
+        field.alignment = .right
+        field.delegate = self
+        field.target = self
+        field.action = #selector(commitField)
+        field.setAccessibilityLabel(label)
+        addSubview(field)
+    }
+    required init?(coder: NSCoder) { fatalError("not used") }
+    override var preferredWidth: CGFloat { 190 }
+    override func updateEnabledState() { field.isEnabled = isEnabled }
+    override func layout() { super.layout(); field.frame = NSRect(x: 0, y: 2, width: bounds.width, height: bounds.height - 4) }
+    override func draw(_ dirtyRect: NSRect) { if isFocused { InterfaceStyle.strokeFocus(bounds) } }
+    override func accessibilityValue() -> Any? { field.stringValue }
+    override func handleKey(_ event: NSEvent) -> Bool { false }
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        guard isEnabled, commandSelector == #selector(NSResponder.insertTab(_:)) else { return false }
+        onTab?()
+        return true
+    }
+    @objc private func commitField() { commit() }
+
+    func commit() {
+        guard isEnabled, let value = Int(field.stringValue), value > 0 else {
+            NSSound.beep()
+            field.stringValue = String(acceptedValue)
+            return
+        }
+        guard value != acceptedValue, value != dispatchedValue else { return }
+        dispatchedValue = value
+        onCommit?(value)
+    }
+}
+
+extension PanelIntegerField: NSTextFieldDelegate {
+    func controlTextDidBeginEditing(_ obj: Notification) { onFocusRequest?(self) }
+    func controlTextDidEndEditing(_ obj: Notification) { commit() }
 }
 
 final class PanelPopupButton: NSPopUpButton {

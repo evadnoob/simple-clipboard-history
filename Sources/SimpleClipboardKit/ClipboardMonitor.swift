@@ -109,8 +109,7 @@ final class ClipboardMonitor {
         let value = settings()
         defer { onChange?() }
         do {
-            let removed = try store.enforceRetention(countLimit: value.historyLimit, maximumBytes: value.maximumHistoryBytes,
-                                                     retentionDays: value.retentionDays, now: now)
+            let removed = try store.enforceRetention(countLimit: value.historyLimit, maximumBytes: value.maximumHistoryBytes, now: now)
             retentionError = nil
             return removed
         } catch {
@@ -136,8 +135,7 @@ final class ClipboardMonitor {
             case .success(let clip):
                 do {
                     let id = try store.record(clip)
-                    try store.enforceRetention(countLimit: settings.historyLimit, maximumBytes: settings.maximumHistoryBytes,
-                                               retentionDays: settings.retentionDays)
+                    try store.enforceRetention(countLimit: settings.historyLimit, maximumBytes: settings.maximumHistoryBytes)
                     if let summary = try store.recent(limit: 1).first, summary.id == id {
                         state = .recorded(summary)
                     } else {

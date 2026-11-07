@@ -30,7 +30,8 @@ check(Settings.maximumClipMegabyteChoices.contains(Settings.defaults.maximumClip
 check(Settings.defaults.pickerWidth == 460 && Settings.defaults.pickerContentLines == 2, "picker geometry defaults")
 check(Settings.defaults.pickerDensity == 4 && Settings.defaults.maximumVisibleItems == 8, "density and visible-item defaults")
 check(Settings.defaults.showTypeIcons && !Settings.defaults.showTimestamps && Settings.defaults.showPasteSpecial, "picker toggles default")
-check(Settings.defaults.maximumHistoryMegabytes == 500 && Settings.defaults.retentionDays == 30, "history retention defaults")
+check(Settings.defaults.maximumHistoryMegabytes == 500, "history size defaults")
+check(Settings.defaults.copyActivityDays == 5, "copy activity range defaults to five days")
 
 // MARK: updates persist and notify
 var notified: [Settings] = []
@@ -49,7 +50,7 @@ store.update {
     $0.showTimestamps = true
     $0.showPasteSpecial = false
     $0.maximumHistoryMegabytes = 1000
-    $0.retentionDays = 90
+    $0.copyActivityDays = 10
 }
 check(notified.count == 1, "one notification per update")
 store.update { $0.historyLimit = 500 }
@@ -66,7 +67,8 @@ check(reloaded.maximumClipMegabytes == 50 && reloaded.maximumClipBytes == 50 * 1
 check(reloaded.capturePaused, "pause persists")
 check(reloaded.pickerWidth == 777 && reloaded.pickerContentLines == 5 && reloaded.pickerDensity == 10, "picker appearance persists including resized width")
 check(reloaded.maximumVisibleItems == 15 && !reloaded.showTypeIcons && reloaded.showTimestamps && !reloaded.showPasteSpecial, "picker toggles persist")
-check(reloaded.maximumHistoryMegabytes == 1000 && reloaded.retentionDays == 90, "retention settings persist")
+check(reloaded.maximumHistoryMegabytes == 1000, "history size persists")
+check(reloaded.copyActivityDays == 10, "copy activity range persists")
 check(reloaded.ignoredApps == ["com.1password.1password", "com.apple.keychainaccess"], "ignored apps persist")
 store.stopIgnoring("com.1password.1password")
 check(SettingsStore(defaults: defaults).settings.ignoredApps == ["com.apple.keychainaccess"], "stop ignoring persists")
@@ -82,7 +84,8 @@ broken.set(99, forKey: "pickerContentLines")
 broken.set(6, forKey: "pickerDensity")
 broken.set(4, forKey: "maximumVisibleItems")
 broken.set(-1, forKey: "maximumHistoryMegabytes")
-broken.set(365, forKey: "retentionDays")
+broken.set(7, forKey: "copyActivityDays")
+broken.set(36_500, forKey: "retentionDays") // ignored legacy preference
 check(SettingsStore(defaults: broken).settings == Settings.defaults, "invalid stored values give defaults")
 
 // MARK: each numeric setting persists independently, including every offered choice
@@ -94,7 +97,7 @@ let integerSettings: [(String, WritableKeyPath<Settings, Int>, [Int], [Int])] = 
     ("pickerDensity", \.pickerDensity, Settings.pickerDensityChoices, [0, 6, Int.max, Int.min]),
     ("maximumVisibleItems", \.maximumVisibleItems, Settings.visibleItemChoices, [0, 9, Int.max, Int.min]),
     ("maximumHistoryMegabytes", \.maximumHistoryMegabytes, Settings.maximumHistoryMegabyteChoices, [0, -1, Int.max, Int.min]),
-    ("retentionDays", \.retentionDays, Settings.retentionDayChoices, [0, -1, Int.max, Int.min])
+    ("copyActivityDays", \.copyActivityDays, Settings.copyActivityDayChoices, [0, 4, 7, Int.max, Int.min]),
 ]
 for (key, path, valid, invalid) in integerSettings {
     let domain = freshDefaults()

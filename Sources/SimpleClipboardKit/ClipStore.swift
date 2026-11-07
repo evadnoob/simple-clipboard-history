@@ -76,6 +76,9 @@ final class ClipStore {
             );
             CREATE INDEX IF NOT EXISTS clips_last_copied_at ON clips (last_copied_at);
             CREATE INDEX IF NOT EXISTS clips_first_copied_at ON clips (first_copied_at);
+            CREATE TABLE IF NOT EXISTS copy_activity (
+                hour INTEGER PRIMARY KEY, copies INTEGER NOT NULL CHECK (copies > 0)
+            );
             CREATE TABLE IF NOT EXISTS representations (
                 clip_id INTEGER NOT NULL REFERENCES clips (id) ON DELETE CASCADE,
                 item_index INTEGER NOT NULL,
@@ -193,6 +196,7 @@ final class ClipStore {
                         source_app_name = ?, source_bundle_identifier = ? WHERE id = ?
                     """, [.real(date.timeIntervalSince1970), .optionalText(clip.sourceAppName),
                           .optionalText(clip.sourceBundleIdentifier), .integer(id)])
+                try incrementActivity(at: date)
                 return id
             }
             try database.run("""
@@ -221,8 +225,29 @@ final class ClipStore {
                 try database.run("INSERT INTO clip_search (rowid, body) VALUES (?, ?)",
                                  [.integer(id), .text(String(text.prefix(Self.searchTextLimit)))])
             }
+            try incrementActivity(at: date)
             return id
         }
+    }
+
+    private func incrementActivity(at date: Date) throws {
+        let hour = Int64(floor(date.timeIntervalSince1970 / 3600))
+        try database.run("INSERT INTO copy_activity(hour, copies) VALUES (?, 1) ON CONFLICT(hour) DO UPDATE SET copies = copies + 1", [.integer(hour)])
+        let cutoff = hour - 10 * 24
+        try database.run("DELETE FROM copy_activity WHERE hour < ?", [.integer(cutoff)])
+    }
+
+    /// Bounded rolling window of absolute UTC-hour buckets; start and end are inclusive bucket boundaries.
+    func copyActivity(from start: Date, through end: Date) throws -> [(hour: Int64, copies: Int)] {
+        lock.lock(); defer { lock.unlock() }
+        let requestedFirst = Int64(floor(start.timeIntervalSince1970 / 3600))
+        let last = Int64(floor(end.timeIntervalSince1970 / 3600))
+        guard requestedFirst <= last else { return [] }
+        let horizonStart = last - 10 * 24
+        let first = max(requestedFirst, horizonStart)
+        // Queries enforce the retention horizon even when capture has been idle for a long time.
+        try database.run("DELETE FROM copy_activity WHERE hour < ?", [.integer(horizonStart)])
+        return try database.query("SELECT hour, copies FROM copy_activity WHERE hour BETWEEN ? AND ? ORDER BY hour", [.integer(first), .integer(last)]) { ($0.integer(0), Int($0.integer(1))) }
     }
 
     /// Moves a clip to the top, for example after it was recalled.
@@ -248,21 +273,11 @@ final class ClipStore {
         try database.execute("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")
     }
 
-    /// Enforces count, age and total representation-byte limits, removing oldest clips first.
+    /// Enforces count and total representation-byte limits, removing oldest clips first.
     @discardableResult
-    func enforceRetention(countLimit: Int, maximumBytes: Int, retentionDays: Int, now: Date = Date()) throws -> Int {
+    func enforceRetention(countLimit: Int, maximumBytes: Int, now: Date = Date()) throws -> Int {
         lock.lock(); defer { lock.unlock() }
-        let cutoff = now.timeIntervalSince1970 - Double(max(0, retentionDays)) * 86_400
         var removed = 0
-        // Delete age-expired clips first, including their bytes, before testing the other budgets.
-        while true {
-            let ids = try database.query("""
-                SELECT id FROM clips WHERE last_copied_at < ? ORDER BY last_copied_at, id LIMIT ?
-                """, [.real(cutoff), .integer(Int64(Self.maintenanceBatchSize))]) { $0.integer(0) }
-            guard !ids.isEmpty else { break }
-            try deleteLocked(ids)
-            removed += ids.count
-        }
         let totals = try retentionTotals()
         var count = totals.count
         var bytes = totals.bytes

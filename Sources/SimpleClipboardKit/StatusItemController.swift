@@ -51,7 +51,7 @@ final class StatusItemController: NSObject, NSWindowDelegate {
 
     /// A template image, so macOS colors it for the menu bar in light and dark mode.
     static let icon: NSImage = {
-        let image = NSImage(systemSymbolName: "list.clipboard", accessibilityDescription: "Simple Clipboard")
+        let image = NSImage(systemSymbolName: "clipboard", accessibilityDescription: "Simple Clipboard")
             ?? NSImage(size: NSSize(width: 16, height: 16))
         image.isTemplate = true
         return image
@@ -119,10 +119,14 @@ final class StatusItemController: NSObject, NSWindowDelegate {
         if case .registered(let choice) = hotkey.status {
             hotkeyLabel = SettingsPanelView.hotkeyTitles.first { $0.0 == choice }?.1
         }
+        let now = Date()
+        let activityStart = now.addingTimeInterval(-Double(settings.copyActivityDays * 24 - 1) * 3600)
+        let activity = (try? store.copyActivity(from: activityStart, through: now)) ?? []
         return SettingsPanelContent(settings: settings, statistics: statistics, clipboardLine: clipboardLine(),
                                     frontmostApp: front.map { (identifier: $0.0, name: $0.1) }, notices: notices,
                                     appNames: names, hotkeyLabel: hotkeyLabel,
-                                    loginEnabled: loginItem.isEnabled, loginMessage: loginItem.message)
+                                    loginEnabled: loginItem.isEnabled, loginMessage: loginItem.message,
+                                    now: now, copyActivity: activity)
     }
 
     private func makeActions() -> SettingsPanelActions {

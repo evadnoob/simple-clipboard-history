@@ -17,13 +17,15 @@ var settings = Settings()
 var statistics = StoreStatistics(clipCount: 142, clipBytes: 3_500_000, diskBytes: 2_200_000,
                                  oldestCopiedAt: now.addingTimeInterval(-86_400), latest: latest)
 var calls: [String] = []
+let activityHour = Int64(floor(now.timeIntervalSince1970 / 3600))
 
 let view = SettingsPanelView()
 var actions = SettingsPanelActions()
 func content() -> SettingsPanelContent {
     SettingsPanelContent(settings: settings, statistics: statistics, clipboardLine: "text, 1.2 KB from Firefox",
                          frontmostApp: (identifier: "net.kovidgoyal.kitty", name: "kitty"), notices: [],
-                         appNames: ["com.1password.1password": "1Password"], hotkeyLabel: "\u{21E7}\u{2318}V", now: now)
+                         appNames: ["com.1password.1password": "1Password"], hotkeyLabel: "\u{21E7}\u{2318}V", now: now,
+                         copyActivity: [(hour: activityHour, copies: 3)])
 }
 actions.update = { change in change(&settings); calls.append("update"); view.show(content()) }
 actions.keepHistory = { limit in settings.historyLimit = limit; calls.append("keep \(limit)"); view.show(content()) }
@@ -37,6 +39,7 @@ view.show(content())
 
 func checkbox(_ name: String) -> PanelCheckbox? { view.control(named: name) as? PanelCheckbox }
 func choices(_ name: String) -> PanelDropdown? { view.control(named: name) as? PanelDropdown }
+func integerField(_ name: String) -> PanelIntegerField? { view.control(named: name) as? PanelIntegerField }
 func button(_ name: String) -> PanelButton? { view.control(named: name) as? PanelButton }
 func key(_ code: UInt16, _ characters: String = "", _ flags: NSEvent.ModifierFlags = []) -> NSEvent {
     NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0, context: nil,
@@ -50,9 +53,9 @@ func render() -> NSBitmapImageRep {
 
 // MARK: layout
 check(view.frame.width == SettingsPanelView.width && view.frame.height == view.preferredHeight, "view sized to its content")
-check(view.preferredHeight > 300 && view.preferredHeight < 700, "height is reasonable (\(view.preferredHeight))")
-check(view.controls.map(\.partName) == ["pause", "login", "hotkey", "ignoreFrontmost", "paste", "plainText", "pasteSpecial",
-    "keep", "largest", "historySize", "retention", "clearHistory", "import", "export", "pickerWidth", "contentLines", "density",
+check(view.preferredHeight > 300 && view.preferredHeight < 760, "height is reasonable (\(view.preferredHeight))")
+check(view.controls.map(\.partName) == ["copyActivityDays", "pause", "login", "hotkey", "ignoreFrontmost", "paste", "plainText", "pasteSpecial",
+    "keep", "largest", "historySize", "clearHistory", "import", "export", "pickerWidth", "contentLines", "density",
     "visibleItems", "typeIcons", "timestamps", "openPicker", "quit"], "four sections in order")
 check(view.controls.allSatisfy { view.bounds.contains($0.convert($0.bounds, to: view)) }, "every control inside the panel")
 for (index, control) in view.controls.enumerated() {
@@ -62,11 +65,99 @@ for (index, control) in view.controls.enumerated() {
 }
 check(checkbox("paste")?.isOn == true && choices("plainText")?.selectedIndex == 0 && checkbox("pause")?.isOn == true, "checkbox states")
 check(choices("hotkey")?.selectedIndex == 0 && choices("hotkey")?.titles.last == "None", "hotkey choices")
-check(choices("keep")?.titles == ["100", "500", "1,000", "5,000", "10,000"] && choices("keep")?.selectedIndex == 2, "keep choices")
+check(choices("plainText")?.titles == ["Preserve original formatting", "Paste as plain text"], "exact paste representation labels")
+check(!view.controls.contains { $0.partName == "retention" }, "legacy retention setting is not shown")
+check(NSImage(systemSymbolName: "clipboard", accessibilityDescription: nil) != nil, "empty clipboard outline symbol is available")
+check(NSImage(systemSymbolName: "checkmark.square.fill", accessibilityDescription: nil) != nil, "Active uses a square status symbol")
+check(integerField("keep")?.field.stringValue == "1000", "maximum items freeform input starts at saved value")
+let numericControl = integerField("keep")!
+for invalid in ["", "0", "-1", "1.5", "9223372036854775808"] {
+    numericControl.field.stringValue = invalid
+    numericControl.commit()
+    check(settings.historyLimit == 1000 && numericControl.field.stringValue == "1000", "invalid maximum items rejected: \\(invalid)")
+}
+check(numericControl.field.frame.width > 0 && numericControl.field.frame.height >= 20,
+      "native numeric editor has usable geometry")
+let plainTextControl = choices("plainText")!
+check(plainTextControl.frame.minX > 0 && plainTextControl.frame.maxX <= view.bounds.width,
+      "long paste dropdown stays within the panel width")
 check(choices("largest")?.titles == ["5", "20", "50", "100"] && choices("largest")?.selectedIndex == 1, "largest clip choices")
 check(button("openPicker")?.title == "Open Picker  \u{21E7}\u{2318}V", "open picker shows the hotkey")
 check(button("ignoreFrontmost")?.title == "+ Ignore kitty", "ignore the frontmost app")
 check(render().pixelsWide > 0, "panel draws")
+check(view.activityChart?.days == 5 && view.activityChart?.buckets.first?.hour == activityHour
+      && view.activityChart?.buckets.first?.copies == 3, "production activity chart receives hourly aggregate data and selected range")
+for days in Settings.copyActivityDayChoices {
+    let chart = CopyActivityChartView(days: days, now: now, buckets: [])
+    chart.frame = NSRect(x: 0, y: 0, width: SettingsPanelView.width - 16, height: 64)
+    let slots = chart.intervalRects
+    check(slots.count == days * 24, "\(days)-day chart keeps one slot per hour")
+    check(slots.allSatisfy { $0.minX.isFinite && $0.width.isFinite && $0.width >= 0
+        && $0.minX >= 0 && $0.maxX <= chart.bounds.width }, "\(days)-day slot geometry stays finite and inside panel")
+}
+let currentHourChart = CopyActivityChartView(days: 10, now: now, buckets: [(hour: activityHour, copies: Int.max)])
+currentHourChart.frame = NSRect(x: 0, y: 0, width: SettingsPanelView.width - 16, height: 64)
+let currentBars = currentHourChart.renderedBarRects
+check(currentBars.count == 1 && currentBars[0].midX > currentHourChart.bounds.width - 3
+      && currentBars[0].maxX <= currentHourChart.bounds.width, "ten-day production geometry puts current activity at the visible right edge")
+let currentBitmap = currentHourChart.bitmapImageRepForCachingDisplay(in: currentHourChart.bounds)!
+currentHourChart.cacheDisplay(in: currentHourChart.bounds, to: currentBitmap)
+let currentRect = currentBars[0]
+let blueCurrentPixels = (0..<currentBitmap.pixelsHigh).contains { y in
+    (max(0, currentBitmap.pixelsWide - 3)..<currentBitmap.pixelsWide).contains { x in
+        guard let color = currentBitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { return false }
+        return color.blueComponent > color.redComponent + 0.1
+    }
+}
+check(blueCurrentPixels, "offscreen rendering paints populated current-hour bar blue")
+check(currentBars.allSatisfy { $0.minX.isFinite && $0.minY.isFinite && $0.width.isFinite && $0.height.isFinite
+    && currentHourChart.bounds.contains($0) }, "maximum aggregate count produces finite contained geometry")
+let adversarialChart = CopyActivityChartView(days: Int.max, now: now,
+    buckets: [(hour: activityHour - 1, copies: Int.min), (hour: activityHour, copies: Int.max)])
+adversarialChart.frame = currentHourChart.frame
+check(adversarialChart.intervalRects.count == 240 && adversarialChart.renderedBarRects.count == 1
+    && adversarialChart.renderedBarRects.allSatisfy { $0.minX.isFinite && $0.minY.isFinite
+        && $0.width.isFinite && $0.height.isFinite && adversarialChart.bounds.contains($0) },
+      "extreme range and negative count do not overflow or draw invalid geometry")
+let zeroWidthChart = CopyActivityChartView(days: 10, now: now, buckets: [(hour: activityHour, copies: 1)])
+zeroWidthChart.frame = NSRect(x: 0, y: 0, width: 0, height: 64)
+check(zeroWidthChart.intervalRects.isEmpty && zeroWidthChart.renderedBarRects.isEmpty,
+      "zero-width drawing has no non-finite geometry")
+let emptyHourChart = CopyActivityChartView(days: 10, now: now, buckets: [])
+emptyHourChart.frame = currentHourChart.frame
+check(emptyHourChart.renderedBarRects.isEmpty, "missing hourly activity is not fabricated")
+let emptyBitmap = emptyHourChart.bitmapImageRepForCachingDisplay(in: emptyHourChart.bounds)!
+emptyHourChart.cacheDisplay(in: emptyHourChart.bounds, to: emptyBitmap)
+let emptyPixel = emptyBitmap.colorAt(x: Int(currentRect.midX), y: Int(currentRect.midY))?.usingColorSpace(.deviceRGB)
+check(emptyPixel.map { $0.blueComponent > $0.redComponent } != true, "offscreen empty hour remains unpainted")
+check(choices("copyActivityDays")?.titles == ["3 days", "5 days", "10 days"] && choices("copyActivityDays")?.selectedIndex == 1,
+      "native range row offers three five and ten days with five selected")
+check((choices("copyActivityDays")?.frame.width ?? 0) > 0 && choices("copyActivityDays")!.frame.maxX <= view.bounds.width,
+      "native activity range dropdown fits the production panel")
+let chartBounds = view.activityChart!.bounds
+let chartHourCount = view.activityChart!.days * 24
+check(chartBounds.width > CGFloat(chartHourCount - 1), "ten-day chart has nonnegative one-pixel hourly slots")
+let emptyChart = CopyActivityChartView(days: 5, now: now, buckets: [])
+emptyChart.frame = NSRect(x: 0, y: 0, width: 440, height: 64)
+emptyChart.draw(emptyChart.bounds)
+check(emptyChart.buckets.isEmpty && emptyChart.days == 5, "empty activity remains empty in production chart")
+let zeroChart = CopyActivityChartView(days: 3, now: now, buckets: [(hour: activityHour, copies: 0)])
+zeroChart.frame = NSRect(x: 0, y: 0, width: 440, height: 64)
+zeroChart.draw(zeroChart.bounds)
+check(zeroChart.buckets.first?.copies == 0 && zeroChart.bounds.width.isFinite && zeroChart.bounds.height.isFinite,
+      "zero activity draws through finite production chart geometry")
+var refreshed = content()
+refreshed.copyActivity = [(hour: activityHour - 1, copies: 0), (hour: activityHour, copies: 7)]
+refreshed.settings.copyActivityDays = 3
+view.show(refreshed)
+check(view.activityChart?.days == 3 && view.activityChart?.buckets.map(\.copies) == [0, 7],
+      "synthetic capture refresh replaces chart data, total and selected range")
+check(choices("copyActivityDays")?.selectedIndex == 0 && view.activityChart?.accessibilityLabel() == "Copy activity over the last 3 days, hourly",
+      "refreshed range selection and chart accessibility endpoints match")
+let longLabel = choices("plainText")!
+check(longLabel.frame.width > 0 && longLabel.frame.maxX <= view.bounds.width && longLabel.popup.itemArray.count == 2,
+      "long approved paste labels remain inside the production panel")
+view.show(content())
 let document = view.scrollView.documentView as! PanelSectionView
 check(document.sectionHeaders.count == 4 && document.sectionHeaders.allSatisfy {
     $0.minX == 0 && $0.width == SettingsPanelView.width && $0.height == 20
@@ -80,8 +171,9 @@ check(Set(dropdowns.map { $0.frame.minX }).count == 1 && Set(dropdowns.map { $0.
       "native dropdowns share a compact value column")
 check(dropdowns.allSatisfy { $0.frame.height == 24 && $0.popup.controlSize == .small && $0.popup.font == InterfaceStyle.controlFont },
       "native dropdown geometry and typography stay compact")
-check(dropdowns.allSatisfy { control in document.separators.contains { $0.minY == control.frame.maxY - 1 && $0.height == 1 } },
-      "thin dividers separate setting rows without adding whitespace")
+check(document.separators.isEmpty, "settings rows have no intra-section separators")
+check(document.sectionHeaders.count == 4, "section boundary strips remain rendered")
+check(dropdowns.allSatisfy { $0.frame.width > 0 && $0.frame.height == 24 }, "dropdown control borders retain production geometry")
 check(checkbox("pause")?.button.cell is NSButtonCell && checkbox("pause")?.button.state == .on,
       "checkbox uses a native checked cell")
 check(checkbox("pause")?.button.controlSize == .small && checkbox("pause")?.button.font == InterfaceStyle.controlFont,
@@ -118,7 +210,9 @@ choices("hotkey")?.select(4)
 check(settings.pickerHotkey == HotkeyChoice.none, "no hotkey")
 choices("largest")?.select(3)
 check(settings.maximumClipMegabytes == 100, "largest clip choice")
-choices("keep")?.select(4)
+integerField("keep")?.onCommit?(Int.max)
+check(settings.historyLimit == Int.max && view.confirmation == nil, "Int.max applies without allocating or loading clip rows")
+integerField("keep")?.onCommit?(10_000)
 check(settings.historyLimit == 10_000 && view.confirmation == nil, "a larger limit applies without asking")
 
 // MARK: ignored apps
@@ -135,13 +229,13 @@ check(button("ignoreFrontmost") != nil, "the frontmost app can be ignored again"
 
 // MARK: confirmation inside the panel
 calls.removeAll()
-choices("keep")?.select(0)
+integerField("keep")?.onCommit?(100)
 check(view.confirmation == .keepHistory(limit: 100, deleting: 42) && settings.historyLimit == 10_000, "a smaller limit asks first")
 check(button("confirmDelete")?.isFocused == true && button("openPicker") == nil, "confirmation replaces the buttons, delete focused")
 check(render().pixelsWide > 0, "confirmation draws")
 view.keyDown(with: key(53, "\u{1b}"))
 check(view.confirmation == nil && settings.historyLimit == 10_000 && calls.isEmpty, "escape cancels")
-choices("keep")?.select(0)
+integerField("keep")?.onCommit?(100)
 view.keyDown(with: key(36, "\r"))
 check(calls == ["keep 100"] && view.confirmation == nil && settings.historyLimit == 100, "return confirms")
 calls.removeAll()
@@ -169,12 +263,11 @@ calls.removeAll()
 view.resetInteraction()
 check(view.focusedPart == "", "nothing focused at first")
 view.keyDown(with: key(48, "\t"))
-check(view.focusedPart == "pause", "tab focuses the first control")
-view.keyDown(with: key(49, " "))
-check(!settings.capturePaused && view.focusedPart == "pause", "space toggles the focused checkbox, focus kept")
+check(view.focusedPart == "copyActivityDays", "tab focuses the first native range control")
+check(settings.copyActivityDays == 5 && view.focusedPart == "copyActivityDays", "range control starts at five days")
 view.keyDown(with: key(48, "\t", .shift))
 check(view.focusedPart == "quit", "shift-tab wraps to the last control")
-for _ in 0..<3 { view.keyDown(with: key(48, "\t")) }
+for _ in 0..<4 { view.keyDown(with: key(48, "\t")) }
 check(view.focusedPart == "hotkey", "tab reaches the hotkey row")
 check(settings.pickerHotkey == HotkeyChoice.none, "hotkey is none before the arrow keys")
 view.keyDown(with: key(124))
@@ -222,7 +315,7 @@ if let directory = ProcessInfo.processInfo.environment["PANEL_SNAPSHOT_DIRECTORY
         view.show(withNotices)
         try! render().representation(using: .png, properties: [:])!.write(
             to: URL(fileURLWithPath: directory).appendingPathComponent("panel-\(appearanceName.rawValue).png"))
-        choices("keep")?.select(0)
+        integerField("keep")?.onCommit?(100)
         try! render().representation(using: .png, properties: [:])!.write(
             to: URL(fileURLWithPath: directory).appendingPathComponent("panel-confirm-\(appearanceName.rawValue).png"))
         view.cancelConfirmation()
@@ -248,6 +341,8 @@ choices("contentLines")?.select(3)
 check(settings.pickerContentLines == 5 && settings.pickerWidth == 560 && settings.pickerDensity == 4, "consecutive content lines binding")
 choices("density")?.select(1)
 check(settings.pickerDensity == 7 && settings.pickerContentLines == 5, "density independent of lines")
+choices("copyActivityDays")?.select(2)
+check(settings.copyActivityDays == 10 && view.activityChart?.days == 10, "range selection updates the production chart")
 choices("visibleItems")?.select(3)
 check(settings.maximumVisibleItems == 15 && settings.pickerDensity == 7, "visible cap binding")
 checkbox("typeIcons")?.toggle()
@@ -256,7 +351,9 @@ checkbox("pasteSpecial")?.toggle()
 check(!settings.showTypeIcons && settings.showTimestamps && !settings.showPasteSpecial, "picker toggles bind")
 choices("historySize")?.select(3)
 choices("retention")?.select(0)
-check(settings.maximumHistoryMegabytes == 1000 && settings.retentionDays == 7, "history size and retention bind")
+check(settings.maximumHistoryMegabytes == 1000 && !view.controls.contains { $0.partName == "retention" }, "history size binds and retention is hidden")
+settings.capturePaused = false
+view.show(content())
 check(view.statusLine.contains("142 items") && view.statusLine.contains(Format.bytes(statistics.clipBytes))
     && view.statusLine.contains("1000 MB") && view.statusLine.hasPrefix("Active"), "real status and configured byte limit")
 checkbox("pause")?.toggle()
@@ -292,7 +389,7 @@ for _ in 0..<view.controls.filter({ $0.isEnabled }).count {
 }
 check(!visited.contains("import") && !visited.contains("export") && visited.contains("pickerWidth"), "tab skips disabled controls and reaches native dropdowns")
 view.moveFocus(by: 1)
-check(view.focusedPart == "pause", "tab wraps")
+check(view.focusedPart == "copyActivityDays", "tab wraps")
 button("clearHistory")?.press()
 view.moveFocus(by: 1)
 check(view.focusedPart == "confirmCancel", "confirmation focus stays within actions")
@@ -359,13 +456,125 @@ windowView.actions.update = { change in
     synthetic.settings = windowSettings.settings
     windowController.show(synthetic)
 }
+var windowKeepHistoryCalls = 0
 windowView.actions.keepHistory = { limit in
+    windowKeepHistoryCalls += 1
     windowSettings.update { $0.historyLimit = limit }
     synthetic.settings = windowSettings.settings
     windowController.show(synthetic)
 }
 windowController.show(synthetic)
 let realPanel = windowController.panel
+let productionIntegerField = windowView.control(named: "keep") as! PanelIntegerField
+check(realPanel.makeFirstResponder(productionIntegerField.field), "native maximum items field receives keyboard focus")
+let editor = realPanel.fieldEditor(true, for: productionIntegerField.field) as! NSTextView
+editor.string = "1234"
+productionIntegerField.field.textDidChange(Notification(name: NSText.didChangeNotification, object: editor))
+editor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+check(windowSettings.settings.historyLimit == 1234, "field editor Return commits entered maximum items")
+windowSettings.update { $0.historyLimit = 1000 }
+synthetic.settings = windowSettings.settings
+windowController.show(synthetic)
+windowView.resetInteraction()
+while windowView.focusedPart != "keep" { windowView.moveFocus(by: 1) }
+let tabField = windowView.control(named: "keep") as! PanelIntegerField
+check(realPanel.fieldEditor(false, for: tabField.field) === realPanel.firstResponder, "Tab navigation gives native field-editor focus")
+let tabEditor = realPanel.fieldEditor(false, for: tabField.field) as! NSTextView
+tabEditor.selectAll(nil)
+tabEditor.insertText("2000", replacementRange: NSRange(location: NSNotFound, length: 0))
+tabEditor.doCommand(by: #selector(NSResponder.insertTab(_:)))
+check(windowView.focusedPart != "keep" && windowSettings.settings.historyLimit == 2000,
+      "Tab away commits native edit exactly once")
+windowSettings.update { $0.historyLimit = 1000 }
+synthetic.settings = windowSettings.settings
+windowController.show(synthetic)
+let refreshField = windowView.control(named: "keep") as! PanelIntegerField
+check(realPanel.makeFirstResponder(refreshField.field), "rebuilt field can receive focus")
+let refreshEditor = realPanel.fieldEditor(true, for: refreshField.field) as! NSTextView
+refreshEditor.string = "4321"
+refreshField.field.textDidChange(Notification(name: NSText.didChangeNotification, object: refreshEditor))
+windowController.show(synthetic)
+let refreshedFieldValue = (windowView.control(named: "keep") as? PanelIntegerField)?.field.stringValue ?? "nil"
+check(refreshedFieldValue == "4321" && windowSettings.settings.historyLimit == 4321,
+      "unrelated panel refresh commits native field-editor draft (field=\(refreshedFieldValue), saved=\(windowSettings.settings.historyLimit))")
+var numericCommitCount = 0
+windowSettings.onChange = { if $0.historyLimit == 9876 { numericCommitCount += 1 } }
+let blurField = windowView.control(named: "keep") as! PanelIntegerField
+var fieldCommitCount = 0
+let originalBlurCommit = blurField.onCommit
+blurField.onCommit = { value in fieldCommitCount += 1; originalBlurCommit?(value) }
+check(realPanel.makeFirstResponder(blurField.field), "field supports mouse-focus editing")
+let blurEditor = realPanel.fieldEditor(true, for: blurField.field) as! NSTextView
+blurEditor.selectAll(nil)
+blurEditor.insertText("9876", replacementRange: NSRange(location: NSNotFound, length: 0))
+blurField.field.textDidChange(Notification(name: NSText.didChangeNotification, object: blurEditor))
+check(realPanel.makeFirstResponder(windowView), "moving focus away ends native field editing")
+check(windowSettings.settings.historyLimit == 9876 && numericCommitCount == 1 && fieldCommitCount == 1,
+      "blur commits native field callback and setting exactly once")
+windowSettings.onChange = nil
+windowSettings.update { $0.historyLimit = 1000 }
+synthetic.settings = windowSettings.settings
+windowController.show(synthetic)
+let pendingField = windowView.control(named: "keep") as! PanelIntegerField
+check(realPanel.makeFirstResponder(pendingField.field), "maximum items field accepts pending-reduction edit")
+let pendingEditor = realPanel.fieldEditor(true, for: pendingField.field) as! NSTextView
+pendingEditor.selectAll(nil)
+pendingEditor.insertText("100", replacementRange: NSRange(location: NSNotFound, length: 0))
+pendingField.field.textDidChange(Notification(name: NSText.didChangeNotification, object: pendingEditor))
+var freshPanelContent = synthetic
+freshPanelContent.clipboardLine = "fresh clipboard status"
+freshPanelContent.statistics = StoreStatistics(clipCount: 142, clipBytes: 4_000_000, diskBytes: 3_000_000,
+    oldestCopiedAt: now.addingTimeInterval(-2 * 86_400), latest: latest)
+windowController.show(freshPanelContent)
+check(windowView.confirmation == .keepHistory(limit: 100, deleting: 42)
+    && windowView.content?.settings.historyLimit == 1000 && windowSettings.settings.historyLimit == 1000,
+      "refresh with pending reduction keeps accepted limit in content and storage")
+check(windowView.content?.clipboardLine == "fresh clipboard status"
+    && windowView.content?.statistics?.clipBytes == 4_000_000,
+      "refresh retains incoming clipboard and statistics while edit commits")
+windowView.cancelConfirmation()
+check(windowSettings.settings.historyLimit == 1000
+    && (windowView.control(named: "keep") as? PanelIntegerField)?.field.stringValue == "1000",
+      "cancelling pending reduction restores accepted input value")
+let repeatPendingField = windowView.control(named: "keep") as! PanelIntegerField
+check(realPanel.makeFirstResponder(repeatPendingField.field), "cancelled value can be re-edited natively")
+let repeatEditor = realPanel.fieldEditor(true, for: repeatPendingField.field) as! NSTextView
+repeatEditor.selectAll(nil)
+repeatEditor.insertText("100", replacementRange: NSRange(location: NSNotFound, length: 0))
+repeatPendingField.field.textDidChange(Notification(name: NSText.didChangeNotification, object: repeatEditor))
+repeatEditor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
+check(windowView.confirmation == .keepHistory(limit: 100, deleting: 42),
+      "re-entering cancelled candidate asks for confirmation again")
+let keepCallsBeforeConfirm = windowKeepHistoryCalls
+windowView.confirm()
+check(windowKeepHistoryCalls == keepCallsBeforeConfirm + 1 && windowSettings.settings.historyLimit == 100,
+      "confirmed reduction invokes history-limit action exactly once")
+windowSettings.update { $0.historyLimit = 4321 }
+synthetic.settings = windowSettings.settings
+windowController.show(synthetic)
+let unchangedField = windowView.control(named: "keep") as! PanelIntegerField
+check(realPanel.makeFirstResponder(unchangedField.field), "unchanged numeric value can be edited")
+var unchangedRefresh = synthetic
+unchangedRefresh.clipboardLine = "new clip, unchanged numeric draft"
+unchangedRefresh.statistics?.clipBytes = 4_500_000
+windowController.show(unchangedRefresh)
+check(windowView.content?.clipboardLine == "new clip, unchanged numeric draft"
+    && windowView.content?.statistics?.clipBytes == 4_500_000,
+      "unchanged field blur retains fresh clipboard and statistics")
+let invalidField = windowView.control(named: "keep") as! PanelIntegerField
+check(realPanel.makeFirstResponder(invalidField.field), "invalid numeric value can be edited")
+let invalidEditor = realPanel.fieldEditor(true, for: invalidField.field) as! NSTextView
+invalidEditor.selectAll(nil)
+invalidEditor.insertText("0", replacementRange: NSRange(location: NSNotFound, length: 0))
+invalidField.field.textDidChange(Notification(name: NSText.didChangeNotification, object: invalidEditor))
+var invalidRefresh = synthetic
+invalidRefresh.clipboardLine = "new clip, invalid numeric draft"
+invalidRefresh.statistics?.clipBytes = 4_600_000
+windowController.show(invalidRefresh)
+check(windowView.content?.clipboardLine == "new clip, invalid numeric draft"
+    && windowView.content?.statistics?.clipBytes == 4_600_000
+    && windowSettings.settings.historyLimit == 4321,
+      "invalid field blur rejects draft but retains fresh panel content")
 func windowFits(_ label: String) {
     check(visibleFrame.contains(realPanel.frame), "\(label): frame within anchor screen")
     check(realPanel.contentView?.bounds.size == windowView.frame.size
@@ -384,15 +593,39 @@ let ordinaryHeight = realPanel.frame.height
 (windowView.control(named: "clearHistory") as? PanelButton)?.press()
 check(realPanel.frame.height == ordinaryHeight + 24 && windowView.preferredHeight == realPanel.frame.height,
       "clear confirmation immediately grows the owning window")
+let clearLockedField = windowView.control(named: "keep") as! PanelIntegerField
+check(!clearLockedField.isEnabled && !clearLockedField.field.isEnabled, "clear confirmation disables native numeric editor")
+clearLockedField.field.stringValue = "77"
+clearLockedField.commit()
+check(windowSettings.settings.historyLimit == 4321, "disabled numeric editor cannot modify history during clear confirmation")
 windowFits("confirmation")
 (windowView.control(named: "confirmCancel") as? PanelButton)?.press()
 check(realPanel.frame.height == ordinaryHeight, "cancel immediately shrinks the owning window")
-(windowView.control(named: "keep") as? PanelDropdown)?.select(0)
+let reductionField = windowView.control(named: "keep") as! PanelIntegerField
+check(realPanel.makeFirstResponder(reductionField.field), "maximum items field re-enters native edit mode")
+let reductionEditor = realPanel.fieldEditor(true, for: reductionField.field) as! NSTextView
+reductionEditor.selectAll(nil)
+reductionEditor.insertText("100", replacementRange: NSRange(location: NSNotFound, length: 0))
+reductionField.field.textDidChange(Notification(name: NSText.didChangeNotification, object: reductionEditor))
+reductionEditor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
 check(windowView.confirmation == .keepHistory(limit: 100, deleting: 42)
     && realPanel.frame.height == ordinaryHeight + 24, "smaller-limit confirmation also resizes")
+let reductionLockedField = windowView.control(named: "keep") as! PanelIntegerField
+check(!reductionLockedField.isEnabled && !reductionLockedField.field.isEnabled, "reduction confirmation disables native numeric editor")
+reductionLockedField.field.stringValue = "200"
+reductionLockedField.commit()
+check(windowView.confirmation == .keepHistory(limit: 100, deleting: 42) && windowSettings.settings.historyLimit == 4321,
+      "disabled editor cannot replace pending reduction")
 windowView.keyDown(with: key(53))
-check(realPanel.frame.height == ordinaryHeight, "escape cancel shrinks without external refresh")
-(windowView.control(named: "keep") as? PanelDropdown)?.select(0)
+check(realPanel.frame.height == ordinaryHeight && windowSettings.settings.historyLimit == 4321,
+      "escape cancels reduction and preserves saved limit")
+let confirmedField = windowView.control(named: "keep") as! PanelIntegerField
+check(realPanel.makeFirstResponder(confirmedField.field), "field re-enters native edit after cancel")
+let confirmedEditor = realPanel.fieldEditor(true, for: confirmedField.field) as! NSTextView
+confirmedEditor.selectAll(nil)
+confirmedEditor.insertText("100", replacementRange: NSRange(location: NSNotFound, length: 0))
+confirmedField.field.textDidChange(Notification(name: NSText.didChangeNotification, object: confirmedEditor))
+confirmedEditor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
 windowView.confirm()
 check(windowSettings.settings.historyLimit == 100 && realPanel.frame.height == ordinaryHeight,
       "confirm applies through temporary defaults and restores ordinary height")

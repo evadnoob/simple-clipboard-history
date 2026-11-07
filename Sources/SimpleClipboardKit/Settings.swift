@@ -31,7 +31,7 @@ struct Settings: Equatable {
     var showTimestamps = false
     var showPasteSpecial = true
     var maximumHistoryMegabytes = 500
-    var retentionDays = 30
+    var copyActivityDays = 5
 
     var maximumClipBytes: Int { Self.bytes(megabytes: maximumClipMegabytes) }
     var maximumHistoryBytes: Int { Self.bytes(megabytes: maximumHistoryMegabytes) }
@@ -47,12 +47,12 @@ struct Settings: Equatable {
         if maximumClipMegabytes < 1 || maximumClipMegabytes > Int.max / (1024 * 1024) {
             value.maximumClipMegabytes = Self.defaults.maximumClipMegabytes
         }
+        if !Self.copyActivityDayChoices.contains(copyActivityDays) { value.copyActivityDays = Self.defaults.copyActivityDays }
         if !(280...1200).contains(pickerWidth) { value.pickerWidth = Self.defaults.pickerWidth }
         if !Self.pickerContentLineChoices.contains(pickerContentLines) { value.pickerContentLines = Self.defaults.pickerContentLines }
         if !Self.pickerDensityChoices.contains(pickerDensity) { value.pickerDensity = Self.defaults.pickerDensity }
         if !Self.visibleItemChoices.contains(maximumVisibleItems) { value.maximumVisibleItems = Self.defaults.maximumVisibleItems }
         if !Self.maximumHistoryMegabyteChoices.contains(maximumHistoryMegabytes) { value.maximumHistoryMegabytes = Self.defaults.maximumHistoryMegabytes }
-        if !Self.retentionDayChoices.contains(retentionDays) { value.retentionDays = Self.defaults.retentionDays }
         value.ignoredApps = ignoredApps.filter { !$0.isEmpty }
         return value
     }
@@ -60,13 +60,13 @@ struct Settings: Equatable {
     static let defaults = Settings()
     /// Choices offered in the settings panel.
     static let historyLimitChoices = [100, 500, 1000, 5000, 10_000]
+    static let copyActivityDayChoices = [3, 5, 10]
     static let maximumClipMegabyteChoices = [5, 20, 50, 100]
     static let pickerWidthChoices = [360, 460, 560]
     static let pickerContentLineChoices = [1, 2, 3, 5]
     static let pickerDensityChoices = [4, 7, 10]
     static let visibleItemChoices = [5, 8, 10, 15]
     static let maximumHistoryMegabyteChoices = [100, 250, 500, 1000]
-    static let retentionDayChoices = [7, 14, 30, 90]
 }
 
 /// Keeps the settings in user defaults (the app's preferences domain). Invalid stored values read as defaults.
@@ -87,7 +87,7 @@ final class SettingsStore {
         static let showTimestamps = "showTimestamps"
         static let showPasteSpecial = "showPasteSpecial"
         static let maximumHistoryMegabytes = "maximumHistoryMegabytes"
-        static let retentionDays = "retentionDays"
+        static let copyActivityDays = "copyActivityDays"
     }
 
     private let defaults: UserDefaults
@@ -120,7 +120,7 @@ final class SettingsStore {
         if let value = integer(defaults, Key.pickerDensity) { settings.pickerDensity = value }
         if let value = integer(defaults, Key.maximumVisibleItems) { settings.maximumVisibleItems = value }
         if let value = integer(defaults, Key.maximumHistoryMegabytes) { settings.maximumHistoryMegabytes = value }
-        if let value = integer(defaults, Key.retentionDays) { settings.retentionDays = value }
+        if let value = integer(defaults, Key.copyActivityDays) { settings.copyActivityDays = value }
         if let value = boolean(defaults, Key.showTypeIcons) { settings.showTypeIcons = value }
         if let value = boolean(defaults, Key.showTimestamps) { settings.showTimestamps = value }
         if let value = boolean(defaults, Key.showPasteSpecial) { settings.showPasteSpecial = value }
@@ -161,7 +161,7 @@ final class SettingsStore {
         defaults.set(updated.showTimestamps, forKey: Key.showTimestamps)
         defaults.set(updated.showPasteSpecial, forKey: Key.showPasteSpecial)
         defaults.set(updated.maximumHistoryMegabytes, forKey: Key.maximumHistoryMegabytes)
-        defaults.set(updated.retentionDays, forKey: Key.retentionDays)
+        defaults.set(updated.copyActivityDays, forKey: Key.copyActivityDays)
         onChange?(updated)
     }
 

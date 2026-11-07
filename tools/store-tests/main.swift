@@ -128,6 +128,60 @@ check((try! FileManager.default.contentsOfDirectory(atPath: clearStore.directory
 try! clearStore.record(textClip("after clear"))
 check(try! clearStore.recent(limit: 10).map(\.preview) == ["after clear"], "store works after delete all")
 
+// MARK: durable captured-copy activity uses absolute-hour buckets, independent of clip lifetime
+let activityStore = freshStore()
+let base = Date(timeIntervalSince1970: 1_800_000_000)
+let activityID = try! activityStore.record(textClip("repeat"), at: base)
+_ = try! activityStore.record(textClip("repeat"), at: base.addingTimeInterval(17))
+check(try! activityStore.recent(limit: 1).first?.id == activityID, "repeated copy remains deduplicated")
+check(try! activityStore.copyActivity(from: base, through: base).first?.copies == 2, "duplicate captures increment hourly activity")
+let activityCutoffStore = freshStore()
+let cutoffDate = Date(timeIntervalSince1970: 1_900_000_000)
+let cutoffHour = floor(cutoffDate.timeIntervalSince1970 / 3600) * 3600
+_ = try! activityCutoffStore.record(textClip("cutoff"), at: Date(timeIntervalSince1970: cutoffHour - 240 * 3600))
+_ = try! activityCutoffStore.record(textClip("now"), at: Date(timeIntervalSince1970: cutoffHour))
+check(try! activityCutoffStore.copyActivity(from: Date(timeIntervalSince1970: cutoffHour - 240 * 3600), through: Date(timeIntervalSince1970: cutoffHour)).map(\.copies) == [1, 1],
+      "exact ten-day hourly cutoff bucket remains inclusive")
+let exactHour = base.addingTimeInterval(3600)
+_ = try! activityStore.record(textClip("next hour"), at: exactHour)
+let buckets = try! activityStore.copyActivity(from: base, through: exactHour)
+check(buckets.map(\.copies) == [2, 1], "hour boundary starts a distinct fixed bucket")
+check(try! activityStore.copyActivity(from: exactHour, through: exactHour.addingTimeInterval(-1)).isEmpty,
+      "inverted activity query is empty")
+try! activityStore.delete(activityID)
+check(try! activityStore.copyActivity(from: base, through: base).first?.copies == 2, "deleting clips preserves activity")
+try! activityStore.deleteAll()
+check(try! activityStore.copyActivity(from: base, through: exactHour).map(\.copies) == [2, 1], "clearing history preserves activity")
+_ = try! activityStore.record(textClip("old"), at: base.addingTimeInterval(-11 * 86400))
+_ = try! activityStore.record(textClip("future"), at: base.addingTimeInterval(86400))
+check(try! activityStore.copyActivity(from: base.addingTimeInterval(-10 * 86400), through: base).map(\.copies) == [2],
+      "query prunes activity older than ten-day horizon")
+check(try! activityStore.copyActivity(from: base, through: base).map(\.copies) == [2], "future fixture is excluded from bounded query")
+_ = try! activityStore.record(textClip("size eviction"), at: base.addingTimeInterval(7200))
+_ = try! activityStore.enforceRetention(countLimit: 0, maximumBytes: 0)
+check(try! activityStore.copyActivity(from: base.addingTimeInterval(7200), through: base.addingTimeInterval(7200)).first?.copies == 1,
+      "count and byte eviction preserve activity")
+let activityDB = try! SQLiteDatabase(path: activityStore.directory.appendingPathComponent("clips.sqlite").path)
+try! activityDB.execute("CREATE TRIGGER fail_activity BEFORE INSERT ON copy_activity BEGIN SELECT RAISE(ABORT, 'injected activity failure'); END;")
+do {
+    try activityStore.record(textClip("rollback"), at: base.addingTimeInterval(10800))
+    check(false, "activity failure aborts record")
+} catch { check(true, "activity failure aborts record") }
+check(try! activityStore.recent(limit: 10).isEmpty, "activity failure rolls back clip insertion")
+check(try! activityStore.copyActivity(from: base.addingTimeInterval(10800), through: base.addingTimeInterval(10800)).isEmpty,
+      "activity failure rolls back aggregate insertion")
+try! activityDB.execute("DROP TRIGGER fail_activity")
+_ = try! activityStore.record(textClip("first success"), at: base.addingTimeInterval(10800))
+let duplicateFailDB = try! SQLiteDatabase(path: activityStore.directory.appendingPathComponent("clips.sqlite").path)
+try! duplicateFailDB.execute("CREATE TRIGGER fail_activity_update BEFORE UPDATE ON copy_activity BEGIN SELECT RAISE(ABORT, 'injected activity failure'); END;")
+do {
+    try activityStore.record(textClip("first success"), at: base.addingTimeInterval(10801))
+    check(false, "duplicate activity failure aborts record")
+} catch { check(true, "duplicate activity failure aborts record") }
+check(try! activityStore.recent(limit: 1).first?.copyCount == 1, "duplicate activity failure rolls back clip update")
+check(try! activityStore.copyActivity(from: base.addingTimeInterval(10800), through: base.addingTimeInterval(10800)).first?.copies == 1,
+      "duplicate activity failure rolls back aggregate update")
+
 // MARK: store reopens the same file
 let reopened = try! ClipStore(directory: store.directory)
 check(try! reopened.recent(limit: 10).map(\.id) == [firstID], "history survives reopening")
@@ -221,6 +275,8 @@ check(try! legacyStore.recent(limit: 300).allSatisfy { $0.contentPreview.isEmpty
 check((try! legacyDB.query("SELECT value FROM store_metadata WHERE key LIKE 'content_preview%'") { $0.integer(0) }).isEmpty,
       "initialization does not advance migration cursor or completion marker")
 check(try! legacyStore.statistics().clipCount == 240 && legacyStore.statistics().clipBytes == 0, "legacy counter seed matches metadata")
+check(try! legacyStore.copyActivity(from: Date(timeIntervalSince1970: 0), through: Date(timeIntervalSince1970: 10_000)).isEmpty,
+      "legacy history rows are not guessed into copy activity")
 check(try! legacyStore.backfillContentPreviewBatch() == false, "first bounded batch leaves more work")
 check((try! legacyDB.query("SELECT value FROM store_metadata WHERE key = 'content_preview_cursor'") { $0.integer(0) }) == [100],
       "one batch commits exactly 100 ids")
@@ -290,7 +346,6 @@ let migrationPasteboard = NSPasteboard(name: NSPasteboard.Name("preview-tests-\(
 let migrationQueue = DispatchQueue(label: "preview-tests", qos: .utility)
 migrationQueue.suspend()
 var migrationSettings = Settings()
-migrationSettings.retentionDays = 36_500
 let backgroundMonitor = ClipboardMonitor(pasteboard: migrationPasteboard, store: resumedLegacy,
                                           settings: { migrationSettings }, previewQueue: migrationQueue)
 var stopAfterFirstBatch = true
@@ -369,32 +424,32 @@ let retentionCases: [(String, Int, Int, Int)] = [
 ]
 for (label, limit, bytes, expectedCount) in retentionCases {
     let target = freshStore()
-    let expired = try! target.record(textClip(String(repeating: "e", count: 100)), at: start.addingTimeInterval(-31 * 86_400))
+    _ = try! target.record(textClip(String(repeating: "e", count: 100)), at: start.addingTimeInterval(-31 * 86_400))
     var ids: [Int64] = []
     for index in 1...4 { ids.append(try! target.record(textClip(String(repeating: "\(index)", count: 10)), at: start)) }
-    let removed = try! target.enforceRetention(countLimit: limit, maximumBytes: bytes, retentionDays: 30, now: start)
+    let removed = try! target.enforceRetention(countLimit: limit, maximumBytes: bytes, now: start)
     check(removed == 5 - expectedCount, "\(label): deletion count")
     check(try! target.recent(limit: 10).map(\.id) == Array(ids.suffix(expectedCount).reversed()), "\(label): deterministic id ties keep newest")
-    check(try! target.items(for: expired).isEmpty, "\(label): expired data deleted")
+    check(try! target.statistics().clipCount == expectedCount, "\(label): item/byte limits produce expected count")
     check(counterMatchesHistory(target), "\(label): counters accurate")
-    check(try! target.enforceRetention(countLimit: limit, maximumBytes: bytes, retentionDays: 30, now: start) == 0, "\(label): repeated pass idempotent")
+    check(try! target.enforceRetention(countLimit: limit, maximumBytes: bytes, now: start) == 0, "\(label): repeated pass idempotent")
 }
 let cutoffStore = freshStore()
 let cutoffID = try! cutoffStore.record(textClip("at cutoff"), at: start.addingTimeInterval(-30 * 86_400))
 try! cutoffStore.record(textClip("before cutoff"), at: start.addingTimeInterval(-30 * 86_400 - 1))
-check(try! cutoffStore.enforceRetention(countLimit: 10, maximumBytes: 100, retentionDays: 30, now: start) == 1, "age cutoff is strict")
-check(try! cutoffStore.recent(limit: 10).map(\.id) == [cutoffID], "clip exactly at cutoff retained")
+check(try! cutoffStore.enforceRetention(countLimit: 10, maximumBytes: 100, now: start) == 0, "legacy retention value ignored")
+check(try! cutoffStore.recent(limit: 10).map(\.id).contains(cutoffID) && (try! cutoffStore.statistics().clipCount) == 2, "old clips retained regardless of legacy cutoff")
 let batchedStore = freshStore()
 var batchIDs: [Int64] = []
 for index in 0..<350 {
     let text = String(format: "%010d", index)
     batchIDs.append(try! batchedStore.record(textClip(text), at: index < 120 ? start.addingTimeInterval(-31 * 86_400) : start))
 }
-check(try! batchedStore.enforceRetention(countLimit: 105, maximumBytes: 900, retentionDays: 30, now: start) == 260, "age and byte eviction crosses multiple bounded batches")
+check(try! batchedStore.enforceRetention(countLimit: 105, maximumBytes: 900, now: start) == 260, "bounded count and byte eviction crosses multiple batches")
 check(try! batchedStore.recent(limit: 400).map(\.id) == Array(batchIDs.suffix(90).reversed()), "batch retention preserves deterministic last 90")
 check(counterMatchesHistory(batchedStore), "batch retention counter totals")
 let batchReopened = try! ClipStore(directory: batchedStore.directory)
-check(try! batchReopened.enforceRetention(countLimit: 90, maximumBytes: 900, retentionDays: 30, now: start) == 0, "retention counters survive reopen")
+check(try! batchReopened.enforceRetention(countLimit: 90, maximumBytes: 900, now: start) == 0, "retention counters survive reopen")
 try! batchReopened.record(textClip(String(format: "%010d", 349)), at: start)
 check(counterMatchesHistory(batchReopened), "dedup does not add count or bytes")
 try! batchReopened.touch(batchIDs.last!, at: start)
@@ -410,12 +465,12 @@ let sharedOld = try! sharedStore.record(largeClip, at: start.addingTimeInterval(
 let sharedNew = try! sharedStore.record(largeCopy, at: start)
 let smallNew = try! sharedStore.record(textClip("small"), at: start.addingTimeInterval(1))
 let sharedFiles = sharedStore.directory.appendingPathComponent("blobs")
-check(try! sharedStore.enforceRetention(countLimit: 2, maximumBytes: large.count + 5, retentionDays: 30, now: start) == 1, "age subtraction respects shared-blob logical sizes")
+check(try! sharedStore.enforceRetention(countLimit: 2, maximumBytes: large.count + 5, now: start) == 1, "byte subtraction respects shared-blob logical sizes")
 check(try! sharedStore.recent(limit: 10).map(\.id) == [smallNew, sharedNew], "shared blob surviving clips not overdeleted")
 check((try! FileManager.default.contentsOfDirectory(atPath: sharedFiles.path)).count == 1, "age eviction preserves referenced blob")
 check(try! sharedStore.items(for: sharedNew) == largeCopy.items, "shared blob readable after age eviction")
 check(try! sharedStore.search("caption", limit: 10).isEmpty && sharedOld != sharedNew, "age eviction removes expired search row")
-check(try! sharedStore.enforceRetention(countLimit: 2, maximumBytes: 5, retentionDays: 30, now: start) == 1, "byte eviction removes last blob owner")
+check(try! sharedStore.enforceRetention(countLimit: 2, maximumBytes: 5, now: start) == 1, "byte eviction removes last blob owner")
 check((try! FileManager.default.contentsOfDirectory(atPath: sharedFiles.path)).isEmpty, "last retained blob reference removal deletes file")
 check(counterMatchesHistory(sharedStore), "shared-blob logical counters consistent")
 
@@ -499,7 +554,7 @@ let startupMonitor = ClipboardMonitor(pasteboard: pasteboard, store: startupStor
 var startupChanges = 0
 startupMonitor.onChange = { startupChanges += 1 }
 startupMonitor.start()
-check(try! startupStore.statistics().clipCount == 0, "startup retention runs immediately")
+check(try! startupStore.statistics().clipCount == 1, "startup maintenance retains old clips")
 check(startupChanges == 1, "startup retention notifies UI even without pasteboard changes")
 startupMonitor.start()
 check(startupChanges == 1, "start is idempotent and does not install another timer pair")
@@ -514,6 +569,7 @@ let expiredFailureID = try! failureStore.record(textClip("expired failure"), at:
 let failureDB = try! SQLiteDatabase(path: failureStore.directory.appendingPathComponent("clips.sqlite").path)
 try! failureDB.execute("CREATE TRIGGER fail_retention BEFORE DELETE ON clips BEGIN SELECT RAISE(ABORT, 'injected retention failure'); END;")
 var failureSettings = Settings()
+failureSettings.historyLimit = 0
 let failureMonitor = ClipboardMonitor(pasteboard: pasteboard, store: failureStore, settings: { failureSettings })
 var failureChanges = 0
 failureMonitor.onChange = { failureChanges += 1 }
@@ -530,11 +586,11 @@ check(failureChanges == 2, "startup failure not swallowed")
 failureMonitor.stop()
 try! failureDB.execute("DROP TRIGGER fail_retention")
 // This is the same entry point the hourly timer and settings-change closure call.
-check(failureMonitor.enforceRetention(now: start) == 1 && failureChanges == 3, "subsequent retention pass deletes expired rows and refreshes UI")
+check(failureMonitor.enforceRetention(now: start) == 1 && failureChanges == 3, "count limit evicts old row and refreshes UI")
 check(failureMonitor.current == nil, "successful maintenance retry clears failure when no clipboard event exists")
 try! failureStore.record(textClip("fresh hourly"), at: start)
 check(failureMonitor.enforceRetention(now: start.addingTimeInterval(31 * 86_400)) == 1 && failureChanges == 4,
-      "hourly-equivalent time advance expires history without new capture")
+      "maintenance enforces count without age deletion")
 try! failureStore.record(textClip("settings one"), at: start)
 let settingsSurvivor = try! failureStore.record(textClip("settings two"), at: start)
 failureSettings.historyLimit = 1

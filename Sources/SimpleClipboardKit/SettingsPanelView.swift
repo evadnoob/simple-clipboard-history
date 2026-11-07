@@ -16,6 +16,7 @@ struct SettingsPanelContent {
     var loginEnabled = false
     var loginMessage: String?
     var now = Date()
+    var copyActivity: [(hour: Int64, copies: Int)] = []
 }
 
 enum PanelNotice: Equatable {
@@ -65,6 +66,7 @@ final class SettingsPanelView: NSView {
     let scrollView = NSScrollView()
     private let settingsBody = PanelSectionView()
     private let footer = PanelSectionView()
+    private(set) var activityChart: CopyActivityChartView?
     private var bodyHeight: CGFloat = 0
     private var footerHeight: CGFloat = 0
     var onPreferredSizeChange: (() -> Void)?
@@ -90,7 +92,17 @@ final class SettingsPanelView: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     func show(_ content: SettingsPanelContent) {
-        self.content = content
+        let previousLimit = self.content?.settings.historyLimit
+        if let editor = window?.firstResponder as? NSTextView,
+           controls.compactMap({ $0 as? PanelIntegerField }).contains(where: { window?.fieldEditor(false, for: $0.field) === editor }) {
+            window?.makeFirstResponder(self)
+        }
+        var updatedContent = content
+        if let previousLimit, let acceptedLimit = self.content?.settings.historyLimit,
+           acceptedLimit != previousLimit {
+            updatedContent.settings.historyLimit = acceptedLimit
+        }
+        self.content = updatedContent
         rebuild()
     }
 
@@ -118,6 +130,7 @@ final class SettingsPanelView: NSView {
         settingsBody.subviews.forEach { $0.removeFromSuperview() }
         footer.subviews.forEach { $0.removeFromSuperview() }
         settingsBody.separators = []
+        activityChart = nil
         settingsBody.sectionHeaders = []
         footer.separators = []
         controls = []
@@ -158,9 +171,6 @@ final class SettingsPanelView: NSView {
             controls.append(control)
         }
 
-        func rowDivider() {
-            container.separators.append(NSRect(x: gap, y: y - 1, width: width - gap * 2, height: 1))
-        }
         func section(_ title: String) {
             container.sectionHeaders.append(NSRect(x: 0, y: y, width: width, height: 20))
             text(title, x: gap, width: width - gap * 2, height: 20,
@@ -173,7 +183,6 @@ final class SettingsPanelView: NSView {
             if name == "paste" { control.toolTip = "When off, choosing an item only restores the clipboard; press Command-V to paste." }
             add(control, x: gap, height: rowHeight)
             y += rowHeight
-            rowDivider()
         }
         func dropdown(_ name: String, _ label: String, _ titles: [String], _ selected: Int?, _ change: @escaping (Int) -> Void) {
             text(label, x: gap, width: labelWidth, height: controlHeight, color: .labelColor)
@@ -181,16 +190,23 @@ final class SettingsPanelView: NSView {
             control.onChange = change
             add(control, x: valueX, width: width - valueX - gap)
             y += controlHeight
-            rowDivider()
         }
         func integerChoice(_ name: String, _ label: String, _ values: [Int], _ value: Int,
                            _ change: @escaping (Int) -> Void) {
             let choices = Self.choices(values, including: value)
             dropdown(name, label, choices.map { $0.formatted() }, choices.firstIndex(of: value)) { change(choices[$0]) }
         }
+        func integerInput(_ name: String, _ label: String, _ value: Int, _ change: @escaping (Int) -> Void) {
+            text(label, x: gap, width: labelWidth, height: controlHeight, color: .labelColor)
+            let control = PanelIntegerField(partName: name, label: label, value: value)
+            control.onCommit = change
+            control.onTab = { [weak self] in self?.moveFocus(by: 1) }
+            add(control, x: valueX, width: width - valueX - gap)
+            y += controlHeight
+        }
 
         let status = NSImageView(frame: NSRect(x: gap, y: 8, width: 12, height: 12))
-        status.image = NSImage(systemSymbolName: settings.capturePaused ? "pause.circle.fill" : "checkmark.circle.fill", accessibilityDescription: nil)
+        status.image = NSImage(systemSymbolName: settings.capturePaused ? "pause.circle.fill" : "checkmark.square.fill", accessibilityDescription: nil)
         status.contentTintColor = settings.capturePaused ? .secondaryLabelColor : .systemGreen
         container.addSubview(status)
         text(statusLine, x: gap + 18, width: width - gap * 2 - 18, height: 28)
@@ -198,6 +214,16 @@ final class SettingsPanelView: NSView {
         text("Clipboard: " + content.clipboardLine, x: gap, width: width - gap * 2,
              height: rowHeight, font: InterfaceStyle.smallFont, color: .secondaryLabelColor, identifier: "clipboardStatus")
         y += rowHeight
+        let chart = CopyActivityChartView(days: settings.copyActivityDays, now: content.now, buckets: content.copyActivity)
+        chart.frame = NSRect(x: gap, y: y, width: width - gap * 2, height: 64)
+        chart.setAccessibilityLabel("Copy activity over the last \(settings.copyActivityDays) days, hourly")
+        container.addSubview(chart)
+        activityChart = chart
+        y += 70
+        dropdown("copyActivityDays", "Copy activity", Settings.copyActivityDayChoices.map { "\($0) days" },
+                 Settings.copyActivityDayChoices.firstIndex(of: settings.copyActivityDays)) { [weak self] index in
+            self?.actions.update { $0.copyActivityDays = Settings.copyActivityDayChoices[index] }
+        }
         section("History")
         checkbox("pause", "Enable clipboard history", !settings.capturePaused) { [weak self] on in
             self?.actions.update { $0.capturePaused = !on }
@@ -252,22 +278,19 @@ final class SettingsPanelView: NSView {
         checkbox("paste", "Paste automatically into frontmost app", settings.recallMode == .paste) { [weak self] on in
             self?.actions.update { $0.recallMode = on ? .paste : .clipboard }
         }
-        dropdown("plainText", "Default representation", ["With Formatting", "Plain Text"], settings.alwaysPastePlainText ? 1 : 0) { [weak self] index in
+        dropdown("plainText", "When pasting", ["Preserve original formatting", "Paste as plain text"], settings.alwaysPastePlainText ? 1 : 0) { [weak self] index in
             self?.actions.update { $0.alwaysPastePlainText = index == 1 }
         }
         checkbox("pasteSpecial", "Show Paste Special in picker", settings.showPasteSpecial) { [weak self] on in
             self?.actions.update { $0.showPasteSpecial = on }
         }
         section("Limits")
-        integerChoice("keep", "Maximum items", Settings.historyLimitChoices, settings.historyLimit) { [weak self] in self?.chooseHistoryLimit($0) }
+        integerInput("keep", "Maximum items", settings.historyLimit) { [weak self] in self?.chooseHistoryLimit($0) }
         integerChoice("largest", "Largest clip (MB)", Settings.maximumClipMegabyteChoices, settings.maximumClipMegabytes) { [weak self] value in
             self?.actions.update { $0.maximumClipMegabytes = value }
         }
         integerChoice("historySize", "History size (MB)", Settings.maximumHistoryMegabyteChoices, settings.maximumHistoryMegabytes) { [weak self] value in
             self?.actions.update { $0.maximumHistoryMegabytes = value }
-        }
-        integerChoice("retention", "Retention (days)", Settings.retentionDayChoices, settings.retentionDays) { [weak self] value in
-            self?.actions.update { $0.retentionDays = value }
         }
         let clear = PanelButton(partName: "clearHistory", title: "Clear History…", isLink: true)
         clear.symbolName = "trash"
@@ -443,7 +466,11 @@ final class SettingsPanelView: NSView {
         focused = control
         control?.isFocused = true
         revealFocus()
-        window?.makeFirstResponder(self)
+        if let integerField = control as? PanelIntegerField {
+            window?.makeFirstResponder(integerField.field)
+        } else {
+            window?.makeFirstResponder(self)
+        }
     }
 
     var focusedPart: String { focused?.partName ?? "" }
@@ -454,7 +481,6 @@ final class SettingsPanelView: NSView {
         let current = focused.flatMap { available.firstIndex(of: $0) }
         let next = current.map { ($0 + delta + available.count) % available.count } ?? (delta > 0 ? 0 : available.count - 1)
         setFocus(available[next])
-        window?.makeFirstResponder(self)
     }
 
     override func keyDown(with event: NSEvent) {
@@ -478,6 +504,63 @@ final class SettingsPanelView: NSView {
         if flags == .command, event.charactersIgnoringModifiers == "w" { actions.close(); return true }
         if flags == .command, event.charactersIgnoringModifiers == "q" { actions.quit(); return true }
         return super.performKeyEquivalent(with: event)
+    }
+}
+
+/// One blue bar per absolute hourly interval in a rolling UTC window.
+final class CopyActivityChartView: NSView {
+    let days: Int
+    let now: Date
+    let buckets: [(hour: Int64, copies: Int)]
+    init(days: Int, now: Date, buckets: [(hour: Int64, copies: Int)]) {
+        self.days = days
+        self.now = now
+        self.buckets = buckets
+        super.init(frame: .zero)
+        setAccessibilityRole(.image)
+    }
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    /// Exactly one horizontal slot per hourly interval. The last slot is always the current hour.
+    var intervalRects: [NSRect] {
+        let intervalCount = max(0, min(days, 10)) * 24
+        guard intervalCount > 0, bounds.width.isFinite, bounds.width > 0 else { return [] }
+        let slotWidth = bounds.width / CGFloat(intervalCount)
+        let gap = min(1, slotWidth * 0.12)
+        let barWidth = max(0, slotWidth - gap)
+        return (0..<intervalCount).map { index in
+            NSRect(x: CGFloat(index) * slotWidth, y: 0, width: barWidth, height: 0)
+        }
+    }
+
+    /// Nonempty bars use the same interval geometry as drawing; missing activity stays absent.
+    var renderedBarRects: [NSRect] {
+        let count = intervalRects.count
+        guard count > 0, bounds.height.isFinite, bounds.height > 14 else { return [] }
+        let endHour = Int64(floor(now.timeIntervalSince1970 / 3600))
+        let startHour = endHour - Int64(count - 1)
+        let values = Dictionary(buckets.map { ($0.hour, $0.copies) }, uniquingKeysWith: max)
+        let maximum = max(1, values.values.filter { $0 > 0 }.max() ?? 0)
+        return intervalRects.enumerated().compactMap { index, slot in
+            let value = values[startHour + Int64(index)] ?? 0
+            guard value > 0 else { return nil }
+            let height = (bounds.height - 14) * CGFloat(value) / CGFloat(maximum)
+            guard height.isFinite, height > 0 else { return nil }
+            return NSRect(x: slot.minX, y: bounds.height - 14 - height, width: slot.width, height: height)
+        }
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        for rect in renderedBarRects {
+            guard rect.minX.isFinite, rect.minY.isFinite, rect.width.isFinite, rect.height.isFinite,
+                  rect.width >= 0, rect.height >= 0, bounds.contains(rect) else { continue }
+            NSColor.systemBlue.setFill()
+            rect.fill()
+        }
+        let labels = ["\(days) days ago", "Now"]
+        for (label, x) in zip(labels, [CGFloat(0), max(0, bounds.width - 30)]) {
+            (label as NSString).draw(at: NSPoint(x: x, y: bounds.height - 12), withAttributes: [.font: InterfaceStyle.smallFont, .foregroundColor: NSColor.secondaryLabelColor])
+        }
     }
 }
 
