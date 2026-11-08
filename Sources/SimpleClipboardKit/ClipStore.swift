@@ -1,5 +1,8 @@
+import AppKit
 import CryptoKit
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 
 /// What lists and menus show for one clip. The clip data stays on disk.
 struct ClipSummary: Equatable {
@@ -430,6 +433,33 @@ final class ClipStore {
     private static func escapeLike(_ text: String) -> String {
         text.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "%", with: "\\%")
             .replacingOccurrences(of: "_", with: "\\_")
+    }
+
+    /// A bounded thumbnail for an image representation. Blob-backed images are decoded from their file URL,
+    /// so the original representation is never copied into memory just to draw a picker row.
+    func thumbnail(for id: Int64, maximumPixelSize: Int) throws -> NSImage? {
+        guard maximumPixelSize > 0 else { return nil }
+        lock.lock(); defer { lock.unlock() }
+        let rows = try database.query("""
+            SELECT type, data, blob_file FROM representations
+            WHERE clip_id = ? ORDER BY item_index, position
+            """, [.integer(id)]) { ($0.text(0) ?? "", $0.blob(1), $0.text(2)) }
+        for (type, data, blobFile) in rows where UTType(type)?.conforms(to: .image) == true {
+            let source: CGImageSource?
+            if let blobFile {
+                source = CGImageSourceCreateWithURL(blobDirectory.appendingPathComponent(blobFile) as CFURL, nil)
+            } else if let data {
+                source = CGImageSourceCreateWithData(data as CFData, nil)
+            } else { continue }
+            guard let source,
+                  let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceThumbnailMaxPixelSize: maximumPixelSize,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                  ] as CFDictionary) else { continue }
+            return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+        }
+        return nil
     }
 
     /// The stored pasteboard items of one clip, read from the database and blob files.

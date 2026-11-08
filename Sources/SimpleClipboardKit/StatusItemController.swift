@@ -120,7 +120,7 @@ final class StatusItemController: NSObject, NSWindowDelegate {
             hotkeyLabel = SettingsPanelView.hotkeyTitles.first { $0.0 == choice }?.1
         }
         let now = Date()
-        let activityStart = now.addingTimeInterval(-Double(settings.copyActivityDays * 24 - 1) * 3600)
+        let activityStart = now.addingTimeInterval(-Double(5 * 24 - 1) * 3600)
         let activity = (try? store.copyActivity(from: activityStart, through: now)) ?? []
         return SettingsPanelContent(settings: settings, statistics: statistics, clipboardLine: clipboardLine(),
                                     frontmostApp: front.map { (identifier: $0.0, name: $0.1) }, notices: notices,

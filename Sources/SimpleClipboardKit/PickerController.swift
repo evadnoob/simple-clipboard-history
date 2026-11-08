@@ -133,6 +133,7 @@ final class PickerController: NSObject, NSWindowDelegate {
         super.init()
         view.onContentChanged = { [weak self] in self?.resizeToContent() }
         view.loadItems = { id in (try? store.items(for: id)) ?? [] }
+        view.loadThumbnail = { id, pixelSize in try? store.thumbnail(for: id, maximumPixelSize: pixelSize) }
         view.onAction = { [weak self] action in self?.handle(action) }
     }
 
@@ -150,6 +151,7 @@ final class PickerController: NSObject, NSWindowDelegate {
 
     /// Prepares the real panel without ordering it front; the harness uses this with synthetic rows and screens.
     func prepareToOpen() {
+        view.resetThumbnailCache()
         model.reset()
         view.settings = settingsStore.settings
         view.recallVerb = settingsStore.settings.recallMode == .paste ? "paste" : "copy"

@@ -48,6 +48,13 @@ struct SettingsPanelActions {
 /// Flat control panel with direct settings. Changes apply immediately; deleting clips asks inside the panel.
 final class SettingsPanelView: NSView {
     static let width: CGFloat = 390
+    static func headerCount(_ count: Int) -> String {
+        guard count >= 1_000_000 else { return count.formatted() }
+        let units: [(Int, String)] = [(1_000_000_000_000, "T"), (1_000_000_000, "B"), (1_000_000, "M")]
+        guard let (divisor, suffix) = units.first(where: { count >= $0.0 }) else { return count.formatted() }
+        return String(format: "%.1f%@", Double(count) / Double(divisor), suffix)
+    }
+
     static let hotkeyTitles: [(HotkeyChoice, String)] = [
         (.shiftCommandV, "\u{21E7}\u{2318}V"), (.optionCommandV, "\u{2325}\u{2318}V"), (.controlCommandV, "\u{2303}\u{2318}V"),
         (.shiftOptionCommandV, "\u{21E7}\u{2325}\u{2318}V"), (.none, "None"),
@@ -205,27 +212,57 @@ final class SettingsPanelView: NSView {
             y += controlHeight
         }
 
-        let status = NSImageView(frame: NSRect(x: gap, y: 8, width: 12, height: 12))
-        status.image = NSImage(systemSymbolName: settings.capturePaused ? "pause.circle.fill" : "checkmark.square.fill", accessibilityDescription: nil)
-        status.contentTintColor = settings.capturePaused ? .secondaryLabelColor : .systemGreen
-        container.addSubview(status)
-        text(statusLine, x: gap + 18, width: width - gap * 2 - 18, height: 28)
-        y += 28
-        text("Clipboard: " + content.clipboardLine, x: gap, width: width - gap * 2,
-             height: rowHeight, font: InterfaceStyle.smallFont, color: .secondaryLabelColor, identifier: "clipboardStatus")
-        y += rowHeight
-        let chart = CopyActivityChartView(days: settings.copyActivityDays, now: content.now, buckets: content.copyActivity)
-        chart.frame = NSRect(x: gap, y: y, width: width - gap * 2, height: 43)
-        chart.setAccessibilityLabel("Copy activity over the last \(settings.copyActivityDays) days, hourly")
-        container.addSubview(chart)
+        let header = SettingsPanelHeaderView(frame: NSRect(x: 0, y: 0, width: width, height: 76))
+        let icon = NSImageView(frame: NSRect(x: gap, y: 8, width: 24, height: 24))
+        icon.image = NSImage(systemSymbolName: "clipboard", accessibilityDescription: "Clipboard")
+        icon.contentTintColor = .labelColor
+        icon.setAccessibilityLabel("Clipboard")
+        header.addSubview(icon)
+        let title = NSTextField(labelWithString: "Simple Clipboard History")
+        title.font = .systemFont(ofSize: 16, weight: .bold)
+        let titleWidth = width - (gap + 32) - 68 - gap
+        title.frame = NSRect(x: gap + 32, y: 8, width: titleWidth, height: 24)
+        title.setAccessibilityIdentifier("panelTitle")
+        title.setAccessibilityLabel("Simple Clipboard History")
+        header.addSubview(title)
+        let chart = CopyActivityChartView(days: 5, now: content.now, buckets: content.copyActivity)
+        chart.frame = NSRect(x: width - 68, y: 9, width: 54, height: 31)
+        chart.setAccessibilityLabel("Copy activity over the last 5 days, hourly")
+        header.addSubview(chart)
         activityChart = chart
-        y += 49
-        dropdown("copyActivityDays", "Copy activity", Settings.copyActivityDayChoices.map { "\($0) days" },
-                 Settings.copyActivityDayChoices.firstIndex(of: settings.copyActivityDays)) { [weak self] index in
-            self?.actions.update { $0.copyActivityDays = Settings.copyActivityDayChoices[index] }
+        let stats = content.statistics
+        let state = settings.capturePaused ? "Paused" : "Active"
+        let count = stats.map { Self.headerCount($0.clipCount) } ?? "Unavailable"
+        let percent = stats.map { min(100, Int(Double($0.clipBytes) * 100 / (Double(settings.maximumHistoryMegabytes) * 1_048_576))) } ?? 0
+        let bytes = stats.map { "\(Format.bytes($0.clipBytes)) / \(settings.maximumHistoryMegabytes) MB (\(percent)%)" } ?? "Unavailable"
+        let countLabel = stats == nil ? "Unavailable items" : "\(count) items"
+        let groups = [(state, gap + 18, 68.0), (countLabel, 107.0, 96.0), (bytes, 215.0, 167.0)]
+        for (index, group) in groups.enumerated() {
+            let label = NSTextField(labelWithString: group.0)
+            label.font = .systemFont(ofSize: 12, weight: .semibold)
+            label.frame = NSRect(x: group.1, y: 48, width: group.2, height: 18)
+            label.setAccessibilityIdentifier("headerStat:\(index)")
+            label.setAccessibilityLabel(group.0)
+            header.addSubview(label)
+            if index == 0 {
+                let square = NSView(frame: NSRect(x: gap, y: 53, width: 10, height: 10))
+                square.wantsLayer = true
+                square.layer?.backgroundColor = (settings.capturePaused ? NSColor.secondaryLabelColor : NSColor.systemGreen).cgColor
+                square.setAccessibilityLabel(state)
+                header.addSubview(square)
+            }
+            if index < 2 {
+                let dividerX = index == 0 ? 100 : 207
+                let divider = NSView(frame: NSRect(x: dividerX, y: 48, width: 1, height: 18))
+                divider.wantsLayer = true
+                divider.layer?.backgroundColor = NSColor.separatorColor.cgColor
+                header.addSubview(divider)
+            }
         }
+        container.addSubview(header)
+        y += 78
         section("History")
-        checkbox("pause", "Enable clipboard history", !settings.capturePaused) { [weak self] on in
+        checkbox("pause", "Keep clipboard history", !settings.capturePaused) { [weak self] on in
             self?.actions.update { $0.capturePaused = !on }
         }
         checkbox("login", "Launch at login", content.loginEnabled) { [weak self] on in self?.actions.setLoginEnabled(on) }
@@ -292,23 +329,6 @@ final class SettingsPanelView: NSView {
         integerChoice("historySize", "History size (MB)", Settings.maximumHistoryMegabyteChoices, settings.maximumHistoryMegabytes) { [weak self] value in
             self?.actions.update { $0.maximumHistoryMegabytes = value }
         }
-        let clear = PanelButton(partName: "clearHistory", title: "Clear History…", isLink: true)
-        clear.symbolName = "trash"
-        clear.onPress = { [weak self] in
-            guard let self, let count = self.content?.statistics?.clipCount, count > 0 else { return }
-            self.ask(.clearHistory(clipCount: count))
-        }
-        add(clear, x: gap)
-        y += controlHeight + 2
-        let importButton = PanelButton(partName: "import", title: "Import: Not implemented", isLink: true)
-        importButton.symbolName = "square.and.arrow.down"
-        importButton.isEnabled = false
-        add(importButton, x: gap, width: 185)
-        let exportButton = PanelButton(partName: "export", title: "Export: Not implemented", isLink: true)
-        exportButton.symbolName = "square.and.arrow.up"
-        exportButton.isEnabled = false
-        add(exportButton, x: 198, width: 184)
-        y += controlHeight + 2
         section("Look and feel")
         dropdown("pickerWidth", "Width", ["Narrow (360 pt)", "Standard (460 pt)", "Wide (560 pt)"], Settings.pickerWidthChoices.firstIndex(of: settings.pickerWidth)) { [weak self] index in
             self?.actions.update { $0.pickerWidth = Settings.pickerWidthChoices[index] }
@@ -361,6 +381,37 @@ final class SettingsPanelView: NSView {
             add(cancel, x: cancelX)
             add(delete, x: deleteX)
         } else {
+            let actionY = y
+            func footerAction(_ name: String, _ title: String, _ symbol: String, x: CGFloat, width: CGFloat,
+                              enabled: Bool = true, action: (() -> Void)? = nil) -> PanelButton {
+                let button = PanelButton(partName: name, title: title, isLink: true)
+                button.symbolName = symbol
+                button.isEnabled = enabled
+                button.onPress = action
+                add(button, x: x, width: width)
+                return button
+            }
+            _ = footerAction("clearHistory", "Clear", "trash", x: gap, width: 78, enabled: (content.statistics?.clipCount ?? 0) > 0) { [weak self] in
+                guard let self, let count = self.content?.statistics?.clipCount, count > 0 else { return }
+                self.ask(.clearHistory(clipCount: count))
+            }
+            footer.separators.append(NSRect(x: 96, y: actionY + 3, width: 1, height: 18))
+            let export = footerAction("export", "Export", "square.and.arrow.up", x: 104, width: 84, enabled: false)
+            export.toolTip = "Export: Not implemented"
+            export.setAccessibilityLabel("Export, Not implemented")
+            footer.separators.append(NSRect(x: 194, y: actionY + 3, width: 1, height: 18))
+            let importAction = footerAction("import", "Import", "square.and.arrow.down", x: 202, width: 78, enabled: false)
+            importAction.toolTip = "Import: Not implemented"
+            importAction.setAccessibilityLabel("Import, Not implemented")
+            footer.separators.append(NSRect(x: 290, y: actionY + 3, width: 1, height: 18))
+            _ = footerAction("settings", "Settings", "gearshape", x: 298, width: 82, enabled: false)
+            y += controlHeight
+            let unavailableFont = NSFont.systemFont(ofSize: 9)
+            text("Not implemented", x: 104, width: 84, height: 16, font: unavailableFont,
+                 color: .secondaryLabelColor, alignment: .center)
+            text("Not implemented", x: 202, width: 78, height: 16, font: unavailableFont,
+                 color: .secondaryLabelColor, alignment: .center)
+            y += 16 + gap
             let pickerTitle = "Open Picker" + (content.hotkeyLabel.map { "  \($0)" } ?? "")
             let open = PanelButton(partName: "openPicker", title: pickerTitle, isLink: true)
             open.symbolName = "list.clipboard"
@@ -507,6 +558,10 @@ final class SettingsPanelView: NSView {
     }
 }
 
+final class SettingsPanelHeaderView: NSView {
+    override var isFlipped: Bool { true }
+}
+
 /// One blue bar per absolute hourly interval in a rolling UTC window.
 final class CopyActivityChartView: NSView {
     let days: Int
@@ -520,6 +575,8 @@ final class CopyActivityChartView: NSView {
         setAccessibilityRole(.image)
     }
     required init?(coder: NSCoder) { fatalError("not used") }
+
+    var showsRangeCaptions: Bool { bounds.width >= 100 }
 
     /// Exactly one horizontal slot per hourly interval. The last slot is always the current hour.
     var intervalRects: [NSRect] {
@@ -541,12 +598,13 @@ final class CopyActivityChartView: NSView {
         let startHour = endHour - Int64(count - 1)
         let values = Dictionary(buckets.map { ($0.hour, $0.copies) }, uniquingKeysWith: max)
         let maximum = max(1, values.values.filter { $0 > 0 }.max() ?? 0)
+        let captionHeight: CGFloat = bounds.width < 100 ? 0 : 14
         return intervalRects.enumerated().compactMap { index, slot in
             let value = values[startHour + Int64(index)] ?? 0
             guard value > 0 else { return nil }
-            let height = (bounds.height - 14) * CGFloat(value) / CGFloat(maximum)
+            let height = (bounds.height - captionHeight) * CGFloat(value) / CGFloat(maximum)
             guard height.isFinite, height > 0 else { return nil }
-            return NSRect(x: slot.minX, y: bounds.height - 14 - height, width: slot.width, height: height)
+            return NSRect(x: slot.minX, y: bounds.height - captionHeight - height, width: slot.width, height: height)
         }
     }
 
@@ -557,6 +615,7 @@ final class CopyActivityChartView: NSView {
             NSColor.systemBlue.setFill()
             rect.fill()
         }
+        guard showsRangeCaptions else { return }
         let labels = ["\(days) days ago", "Now"]
         for (label, x) in zip(labels, [CGFloat(0), max(0, bounds.width - 30)]) {
             (label as NSString).draw(at: NSPoint(x: x, y: bounds.height - 12), withAttributes: [.font: InterfaceStyle.smallFont, .foregroundColor: NSColor.secondaryLabelColor])

@@ -171,6 +171,45 @@ func render(_ view: NSView) -> NSBitmapImageRep {
     return bitmap
 }
 check(render(view).pixelsWide > 0, "picker draws")
+// Real thumbnail drawing is restricted to visible image rows and uses injected synthetic pixels.
+let imageRows = (1...30).map { number -> ClipSummary in
+    var summary = clip(Int64(number), "Synthetic image \(number)")
+    summary.kind = "image"
+    return summary
+}
+let imageModel = PickerModel(search: { _, _ in imageRows })
+let imageView = PickerView(model: imageModel)
+imageView.settings.showTimestamps = false
+imageModel.reset()
+imageView.setFrameSize(NSSize(width: 560, height: 180))
+imageView.layout()
+let redTile = NSImage(size: NSSize(width: 4, height: 4))
+redTile.lockFocus(); NSColor.red.setFill(); NSRect(x: 0, y: 0, width: 4, height: 4).fill(); redTile.unlockFocus()
+var thumbnailLoads: [Int64] = []
+imageView.loadThumbnail = { id, pixels in
+    check(pixels == 36, "thumbnail request uses small target size")
+    thumbnailLoads.append(id)
+    return redTile
+}
+let imageRowsVisible = imageView.visibleRows.map(\.index)
+let imageBitmap = render(imageView)
+check(thumbnailLoads == imageRowsVisible.map { imageRows[$0].id }, "only visible image rows load thumbnails")
+let redSample = imageBitmap.colorAt(x: 20, y: Int(imageView.visibleRows[0].rect.midY))!.usingColorSpace(.sRGB)!
+check(redSample.redComponent > 0.8 && redSample.greenComponent < 0.2, "row renders synthetic thumbnail pixels, not generic symbol")
+let loadCount = thumbnailLoads.count
+_ = imageView.thumbnail(for: imageRows[0].id, pixelSize: 36)
+check(thumbnailLoads.count == loadCount, "thumbnail cache reuses a visible row image")
+for id in 1000..<(1000 + PickerView.thumbnailCacheLimit + 2) { _ = imageView.thumbnail(for: Int64(id), pixelSize: 36) }
+check(imageView.cachedThumbnailCount == PickerView.thumbnailCacheLimit,
+      "thumbnail cache evicts least-recently-used entries at its strict bound")
+var unavailableLoads = 0
+imageView.resetThumbnailCache()
+imageView.loadThumbnail = { _, _ in unavailableLoads += 1; return nil }
+check(imageView.thumbnail(for: 999, pixelSize: 36) == nil && imageView.thumbnail(for: 999, pixelSize: 36) == nil
+      && unavailableLoads == 1, "unavailable thumbnails are cached and not repeatedly decoded")
+imageView.resetThumbnailCache()
+_ = imageView.thumbnail(for: 999, pixelSize: 36)
+check(unavailableLoads == 2, "cache reset invalidates unavailable thumbnail results")
 let secondRow = NSPoint(x: 100, y: view.chrome.listRect.minY + view.rowHeight(at: 0) * 1.5)
 check(view.rowIndex(at: secondRow) == 1, "click point maps to a row")
 check(view.rowIndex(at: NSPoint(x: 100, y: 2)) == nil, "title row is not a clip row")
@@ -266,11 +305,39 @@ let sizeMonitor = ClipboardMonitor(pasteboard: NSPasteboard(name: NSPasteboard.N
                                    store: sizeStore, settings: { Settings() })
 let sizeController = PickerController(store: sizeStore, settingsStore: SettingsStore(defaults: sizeDefaults), monitor: sizeMonitor,
                                       defaults: sizeDefaults)
-check(sizeController.savedSize == NSSize(width: 460, height: 10_000), "default width and uncapped saved height")
+check(sizeController.savedSize == NSSize(width: 560, height: 10_000), "default width and uncapped saved height")
 sizeController.saveSize(NSSize(width: 800, height: 600))
 check(sizeController.savedSize == NSSize(width: 800, height: 600), "picker size is remembered")
 sizeController.saveSize(NSSize(width: 10, height: 10))
 check(sizeController.savedSize == NSSize(width: 800, height: 600), "invalid size does not overwrite saved cap")
+func solidImage(_ color: NSColor, size: NSSize) -> NSImage {
+    let result = NSImage(size: size)
+    result.lockFocus(); color.setFill(); NSRect(origin: .zero, size: size).fill(); result.unlockFocus()
+    return result
+}
+func capturedImage(_ image: NSImage) -> CapturedClip {
+    CapturedClip(items: [[Representation(type: NSPasteboard.PasteboardType.tiff.rawValue, data: image.tiffRepresentation!)]])
+}
+let oldImageID = try! sizeStore.record(capturedImage(solidImage(.red, size: NSSize(width: 20, height: 10))))
+sizeController.prepareToOpen()
+let oldThumbnail = sizeController.view.thumbnail(for: oldImageID, pixelSize: 36)!
+check(sizeController.view.cachedThumbnailCount == 1, "picker caches the image row thumbnail")
+try! sizeStore.deleteAll()
+let reusedImageID = try! sizeStore.record(capturedImage(solidImage(.green, size: NSSize(width: 10, height: 20))))
+check(reusedImageID == oldImageID, "clear history allows SQLite clip id reuse")
+sizeController.prepareToOpen()
+check(sizeController.view.cachedThumbnailCount == 0, "picker reopening clears thumbnails across history replacement")
+let replacementThumbnail = sizeController.view.thumbnail(for: reusedImageID, pixelSize: 36)!
+let oldRep = NSBitmapImageRep(data: oldThumbnail.tiffRepresentation!)!
+let newRep = NSBitmapImageRep(data: replacementThumbnail.tiffRepresentation!)!
+let oldColor = oldRep.colorAt(x: oldRep.pixelsWide / 2, y: oldRep.pixelsHigh / 2)!.usingColorSpace(.sRGB)!
+let newColor = newRep.colorAt(x: newRep.pixelsWide / 2, y: newRep.pixelsHigh / 2)!.usingColorSpace(.sRGB)!
+check(oldColor.redComponent > oldColor.greenComponent && newColor.greenComponent > newColor.redComponent,
+      "reopened picker reads the replacement clip image, not stale cached pixels")
+let landscape = PickerView.aspectFitRect(for: NSSize(width: 40, height: 20), in: NSRect(x: 0, y: 0, width: 32, height: 32))
+let portrait = PickerView.aspectFitRect(for: NSSize(width: 20, height: 40), in: NSRect(x: 0, y: 0, width: 32, height: 32))
+check(landscape.width == 32 && landscape.height == 16 && portrait.width == 16 && portrait.height == 32,
+      "production thumbnail layout aspect-fits landscape and portrait images")
 sizeDefaults.removePersistentDomain(forName: sizeSuite)
 
 // MARK: integrated typography and selected-row contrast
@@ -364,7 +431,8 @@ check(geometryView.contentLines(for: multiline) == ["first", "", "third"], "cont
 check(geometryView.contentLines(for: imageSummary) == [imageSummary.preview], "nontext is one metadata row")
 let threeLineHeight = geometryView.rowHeight(at: 0)
 let singleLineHeight = geometryView.rowHeight(at: 1)
-check(threeLineHeight - singleLineHeight == InterfaceStyle.lineHeight * 2, "variable height follows actual lines")
+check(threeLineHeight >= 3 * InterfaceStyle.lineHeight && singleLineHeight == 40,
+      "variable text rows follow line count and image rows reserve thumbnail height")
 geometryView.settings.pickerDensity = 10
 check(geometryView.rowHeight(at: 0) == threeLineHeight + 12, "density changes padding independently of lines")
 geometryView.settings.pickerDensity = 4

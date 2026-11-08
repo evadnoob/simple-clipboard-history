@@ -4,6 +4,23 @@ This file is the backlog for Simple Clipboard. Keep queued work here across sess
 
 After changes pass their relevant checks, package with the existing signing identity and restart the app automatically. User requested not to wait for a separate restart instruction. Do not change keychain permissions or identities without approval.
 
+Work quickly on approved design alignment. Make reasonable, reversible layout and label choices without repeatedly asking for scope approval or deferring straightforward changes. Batch related edits, use proportionate validation, and reserve user questions for consequential behavior, data loss, security permissions, or genuinely ambiguous intent. Do not use this instruction to invent working Import/Export behavior or bypass safety checks.
+
+## Design alignment
+
+Reference: `~/Desktop/clipboard design.png`. User approved the difference list. Preserve intentional changes: icon-only menu bar, picker without top input/title row, approved paste labels, Look and feel, numeric Maximum items, no age-based retention, no per-setting-row dividers, saved picker resizing and wider default. Do not restore screenshot settings that conflict with these decisions.
+
+- [x] Implemented in source: settings header has clipboard icon and bold **Simple Clipboard History** title; compact chart upper-right uses a fixed five-day range with no range selector. This affects graph display only, not clipboard retention. Counts remain real transactional observed-copy activity.
+- [x] Implemented in source: plain square Active indicator and emphasized Active, item count, and used/maximum size with percentage groups and dividers.
+- [x] Removed the extra clipboard-content status line from the main header.
+- [x] Renamed **Enable clipboard history** to **Keep clipboard history** without changing pause/resume capture semantics.
+- [x] Implemented in source: picker rows use semibold primary text, muted secondary lines, larger type-specific icons, image thumbnails downsampled from stored image representations for visible rows only, and right-aligned row numbers. Blob-backed images decode directly from their file URL. A bounded per-view LRU cache is pruned for deleted clips; synthetic drawing/store tests cover thumbnail pixels, visible-only lookup and cache reuse.
+- [ ] Add image-row metadata matching the reference: **Image (PNG)** or actual format as primary title, with pixel dimensions and stored image size beneath, such as **1200 × 800 · 3.1 MB**. Keep real thumbnails and visible-row-only bounded loading. User identified this as the next picker difference.
+- [ ] Present picker bottom actions as clear icon-and-label groups while retaining existing keyboard behavior.
+- [ ] Decide whether section headers should actually collapse before adding disclosure chevrons. Do not add nonfunctional chevrons.
+- [x] Implemented in source: the footer presents **Clear, Export, Import, Settings** with symbols and separators; Export, Import and deferred Settings are disabled. Clear retains its confirmation flow. Open Picker and Quit remain on a separate secondary row.
+- [x] Current header/footer/thumbnail batch passed 1,035 checks and the production release build; packaged with existing identity, strict signature verified, and restarted. User says picker and menu bar items look good/better and requested a commit. Remaining design differences stay queued; do not treat overall visual alignment as complete.
+
 ## Queued changes
 
 - [ ] Add an **About** page describing what Simple Clipboard is, that David Boon made it with help from AI, and its design aesthetic. Agree on the wording and level of detail before implementation. Keep it accessible from the menu bar settings panel and consistent with the menu-bar-only design; do not add a main window or preferences window.
@@ -13,7 +30,7 @@ After changes pass their relevant checks, package with the existing signing iden
 - [x] Implemented in source: green **Active** indicator uses a small square symbol.
 - [ ] Menu bar uses the empty clipboard outline (`clipboard`) in `StatusItemController.swift`. Packaged, signed, and launched; actual menu bar appearance still needs user verification.
 - [x] Removed **Retention days** from the panel and disabled age-based deletion, including when legacy retention values are present. Count and byte limits remain active; tests updated. Live data-retention behavior still needs checking.
-- [x] Implemented in source: header chart shows observed captured-copy activity as hourly blue bars, with native 3/5/10-day range choice and persisted 5-day default. Counts are transactionally aggregated in SQLite by absolute Unix-hour bucket, include successful repeated deduplicated copies, and survive clip deletion/eviction. Rolling range includes the current hour and preceding intervals; displayed labels use relative range endpoints. No historical backfill or paste tracking. Automated storage/settings/panel checks pass. Packaged, signed, and launched; activity capture and visual rendering still need live validation.
+- [x] Header chart shows observed captured-copy activity as compact hourly blue bars for a fixed five-day range, without a separate label or range selector. Counts are transactionally aggregated in SQLite by absolute Unix-hour bucket, include successful repeated deduplicated copies, and survive clip deletion/eviction. No historical backfill or paste tracking. Packaged, signed, and launched; user approved the improved appearance.
 
 ## Questions and follow-up
 

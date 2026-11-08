@@ -19,6 +19,26 @@ func freshStore() -> ClipStore {
     return try! ClipStore(directory: directory)
 }
 
+// MARK: bounded image thumbnails
+let thumbnailStore = freshStore()
+let fixtureImage = NSImage(size: NSSize(width: 512, height: 512))
+fixtureImage.lockFocus()
+NSColor.red.setFill(); NSRect(x: 0, y: 0, width: 256, height: 512).fill()
+NSColor.green.setFill(); NSRect(x: 256, y: 0, width: 256, height: 512).fill()
+fixtureImage.unlockFocus()
+let fixtureTIFF = fixtureImage.tiffRepresentation!
+let imageClip = CapturedClip(items: [[Representation(type: NSPasteboard.PasteboardType.tiff.rawValue, data: fixtureTIFF)]])
+let thumbnailID = try! thumbnailStore.record(imageClip, at: Date(timeIntervalSince1970: 1_800_000_000))
+check(((try? FileManager.default.contentsOfDirectory(atPath: thumbnailStore.directory.appendingPathComponent("blobs").path).isEmpty) == false),
+      "large synthetic image fixture is blob-backed")
+let thumbnail = try! thumbnailStore.thumbnail(for: thumbnailID, maximumPixelSize: 5)!
+check(max(thumbnail.size.width, thumbnail.size.height) <= 5, "image thumbnail is downsampled to its requested bound")
+let thumbnailRep = NSBitmapImageRep(data: thumbnail.tiffRepresentation!)!
+let left = thumbnailRep.colorAt(x: 0, y: thumbnailRep.pixelsHigh / 2)!.usingColorSpace(.sRGB)!
+let right = thumbnailRep.colorAt(x: thumbnailRep.pixelsWide - 1, y: thumbnailRep.pixelsHigh / 2)!.usingColorSpace(.sRGB)!
+check(left.redComponent > right.redComponent && right.greenComponent > left.greenComponent,
+      "thumbnail preserves distinct red and green fixture pixels")
+
 // MARK: captured clip
 let multiline = textClip("  first line\n\n  second\tline  ")
 check(multiline.preview == "first line second line", "preview collapses whitespace")

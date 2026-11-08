@@ -8,14 +8,21 @@ final class PickerView: NSView {
     /// Called with the model's answer to a key or a double-click.
     var onAction: ((PickerAction) -> Void)?
     var onContentChanged: (() -> Void)?
-    /// Loads the stored items of a clip for the preview.
+    /// Loads the stored items of a clip for the separate preview.
     var loadItems: ((Int64) -> [[Representation]])?
+    /// Loads a downsampled image representation for a visible row only.
+    var loadThumbnail: ((Int64, Int) -> NSImage?)?
     /// Shown in the bar: "paste" or "copy", what recall does with the clip.
     var recallVerb = "paste"
     var now: () -> Date = Date.init
     var settings = Settings()
 
     private var previewCache: (id: Int64, preview: ClipPreview)?
+    private struct ThumbnailKey: Hashable { var clipID: Int64; var pixels: Int }
+    private enum CachedThumbnail { case image(NSImage), unavailable }
+    private var thumbnailCache: [ThumbnailKey: CachedThumbnail] = [:]
+    private var thumbnailUseOrder: [ThumbnailKey] = []
+    static let thumbnailCacheLimit = 32
     private var scrollRemainder: CGFloat = 0
 
     init(model: PickerModel) {
@@ -40,7 +47,9 @@ final class PickerView: NSView {
     func rowHeight(at index: Int) -> CGFloat {
         if case .filters = model.step { return InterfaceStyle.rowHeight }
         guard model.rows.indices.contains(index) else { return InterfaceStyle.rowHeight }
-        return CGFloat(contentLines(for: model.rows[index]).count) * InterfaceStyle.lineHeight + CGFloat(settings.pickerDensity * 2)
+        let clip = model.rows[index]
+        let textHeight = CGFloat(contentLines(for: clip).count) * InterfaceStyle.lineHeight + CGFloat(settings.pickerDensity * 2)
+        return clip.kind == "image" ? max(textHeight, 40) : textHeight
     }
 
     /// Shared geometry for drawing, pointer hit testing, keyboard paging and accessibility.
@@ -117,6 +126,11 @@ final class PickerView: NSView {
     }
 
     private func drawRows(in rect: NSRect) {
+        let liveIDs = Set(model.rows.map(\.id))
+        thumbnailUseOrder.removeAll { key in
+            if !liveIDs.contains(key.clipID) { thumbnailCache.removeValue(forKey: key); return true }
+            return false
+        }
         let gap = InterfaceStyle.gap
         let rowHeight = InterfaceStyle.rowHeight
         if model.rows.isEmpty {
@@ -141,10 +155,15 @@ final class PickerView: NSView {
                 InterfaceStyle.draw("\(position + 1)", in: NSRect(x: row.maxX - gap - numberWidth, y: row.minY, width: numberWidth, height: row.height),
                                     font: InterfaceStyle.smallFont, color: selected ? foreground : .secondaryLabelColor, alignment: .right)
             }
-            if settings.showTypeIcons {
+            if clip.kind == "image", let thumbnail = thumbnail(for: clip.id, pixelSize: 36) {
+                let imageRect = Self.aspectFitRect(for: thumbnail.size, in: NSRect(x: textX, y: row.midY - 16, width: 32, height: 32))
+                thumbnail.draw(in: imageRect, from: .zero, operation: .sourceOver, fraction: 1,
+                               respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
+                textX += 42
+            } else if settings.showTypeIcons {
                 InterfaceStyle.drawSymbol(Self.symbolName(for: clip),
-                    in: NSRect(x: textX, y: row.midY - 8, width: 16, height: 16), color: foreground)
-                textX += 28
+                    in: NSRect(x: textX, y: row.midY - 11, width: 22, height: 22), color: foreground)
+                textX += 32
             }
             let detail = settings.showTimestamps ? Self.rowDetail(clip, now: now()) : ""
             let detailWidth = min(row.width / 3, InterfaceStyle.width(of: detail, font: InterfaceStyle.smallFont))
@@ -152,10 +171,13 @@ final class PickerView: NSView {
                                 width: detailWidth, height: row.height), font: InterfaceStyle.smallFont,
                                 color: selected ? foreground : .secondaryLabelColor, alignment: .right)
             for (line, text) in contentLines(for: clip).enumerated() {
-                InterfaceStyle.draw(text, highlighting: model.query,
-                    in: NSRect(x: textX, y: row.minY + CGFloat(settings.pickerDensity) + CGFloat(line) * InterfaceStyle.lineHeight,
-                               width: max(0, row.maxX - gap * 3 - numberWidth - detailWidth - textX), height: InterfaceStyle.lineHeight),
-                    color: foreground)
+                let textRect = NSRect(x: textX, y: row.minY + CGFloat(settings.pickerDensity) + CGFloat(line) * InterfaceStyle.lineHeight,
+                                      width: max(0, row.maxX - gap * 3 - numberWidth - detailWidth - textX), height: InterfaceStyle.lineHeight)
+                if line == 0 {
+                    InterfaceStyle.draw(text, in: textRect, font: .systemFont(ofSize: InterfaceStyle.font.pointSize, weight: .semibold), color: foreground)
+                } else {
+                    InterfaceStyle.draw(text, in: textRect, font: InterfaceStyle.smallFont, color: selected ? foreground : .secondaryLabelColor)
+                }
             }
         }
     }
@@ -190,6 +212,43 @@ final class PickerView: NSView {
             }
         }
     }
+
+    /// Visible-row thumbnail lookup with a strict per-view LRU bound.
+    func thumbnail(for clipID: Int64, pixelSize: Int) -> NSImage? {
+        let key = ThumbnailKey(clipID: clipID, pixels: pixelSize)
+        if let cached = thumbnailCache[key] {
+            touchThumbnail(key)
+            if case .image(let image) = cached { return image }
+            return nil
+        }
+        let loaded = loadThumbnail?(clipID, pixelSize).map(CachedThumbnail.image) ?? .unavailable
+        thumbnailCache[key] = loaded
+        touchThumbnail(key)
+        while thumbnailUseOrder.count > Self.thumbnailCacheLimit {
+            thumbnailCache.removeValue(forKey: thumbnailUseOrder.removeFirst())
+        }
+        if case .image(let image) = loaded { return image }
+        return nil
+    }
+
+    private func touchThumbnail(_ key: ThumbnailKey) {
+        thumbnailUseOrder.removeAll { $0 == key }
+        thumbnailUseOrder.append(key)
+    }
+
+    func resetThumbnailCache() {
+        thumbnailCache.removeAll(keepingCapacity: true)
+        thumbnailUseOrder.removeAll(keepingCapacity: true)
+    }
+
+    static func aspectFitRect(for imageSize: NSSize, in slot: NSRect) -> NSRect {
+        guard imageSize.width > 0, imageSize.height > 0, slot.width > 0, slot.height > 0 else { return .zero }
+        let scale = min(slot.width / imageSize.width, slot.height / imageSize.height)
+        let size = NSSize(width: imageSize.width * scale, height: imageSize.height * scale)
+        return NSRect(x: slot.midX - size.width / 2, y: slot.midY - size.height / 2, width: size.width, height: size.height)
+    }
+
+    var cachedThumbnailCount: Int { thumbnailCache.count }
 
     static func rowDivider(in row: NSRect) -> NSRect {
         NSRect(x: row.minX + InterfaceStyle.gap, y: row.maxY - 1, width: row.width - InterfaceStyle.gap * 2, height: 1)

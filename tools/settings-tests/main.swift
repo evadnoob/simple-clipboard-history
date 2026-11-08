@@ -27,7 +27,7 @@ check(Settings.defaults.maximumClipBytes == 20 * 1024 * 1024, "default largest c
 check(!Settings.defaults.capturePaused, "capture runs by default")
 check(Settings.historyLimitChoices.contains(Settings.defaults.historyLimit), "default limit is a menu choice")
 check(Settings.maximumClipMegabyteChoices.contains(Settings.defaults.maximumClipMegabytes), "default size is a menu choice")
-check(Settings.defaults.pickerWidth == 460 && Settings.defaults.pickerContentLines == 2, "picker geometry defaults")
+check(Settings.defaults.pickerWidth == 560 && Settings.defaults.pickerContentLines == 2, "picker geometry defaults")
 check(Settings.defaults.pickerDensity == 4 && Settings.defaults.maximumVisibleItems == 8, "density and visible-item defaults")
 check(Settings.defaults.showTypeIcons && !Settings.defaults.showTimestamps && Settings.defaults.showPasteSpecial, "picker toggles default")
 check(Settings.defaults.maximumHistoryMegabytes == 500, "history size defaults")
