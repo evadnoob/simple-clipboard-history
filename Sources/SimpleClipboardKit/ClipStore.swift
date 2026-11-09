@@ -259,9 +259,13 @@ final class ClipStore {
         try database.run("UPDATE clips SET last_copied_at = ? WHERE id = ?", [.real(date.timeIntervalSince1970), .integer(id)])
     }
 
-    func delete(_ id: Int64) throws {
+    @discardableResult
+    func delete(_ id: Int64) throws -> Bool {
         lock.lock(); defer { lock.unlock() }
+        let exists = try database.query("SELECT 1 FROM clips WHERE id = ?", [.integer(id)]) { $0.integer(0) }.first != nil
+        guard exists else { return false }
         try deleteLocked([id])
+        return true
     }
 
     /// Deletes every clip and blob file.
@@ -433,6 +437,34 @@ final class ClipStore {
     private static func escapeLike(_ text: String) -> String {
         text.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "%", with: "\\%")
             .replacingOccurrences(of: "_", with: "\\_")
+    }
+
+    struct ImageMetadata: Equatable {
+        var format: String
+        var width: Int
+        var height: Int
+        var byteCount: Int
+    }
+
+    /// Metadata is read only for visible image rows; ImageIO reads properties without decoding pixels.
+    func imageMetadata(for id: Int64) -> ImageMetadata? {
+        lock.lock(); defer { lock.unlock() }
+        let rows = try? database.query("SELECT type, data, blob_file FROM representations WHERE clip_id = ? ORDER BY item_index, position", [.integer(id)]) { ($0.text(0) ?? "", $0.blob(1), $0.text(2)) }
+        for (type, data, blobFile) in rows ?? [] where UTType(type)?.conforms(to: .image) == true {
+            let source: CGImageSource?
+            var count = data?.count ?? 0
+            if let blobFile {
+                let url = blobDirectory.appendingPathComponent(blobFile)
+                source = CGImageSourceCreateWithURL(url as CFURL, nil)
+                count = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            } else if let data { source = CGImageSourceCreateWithData(data as CFData, nil) }
+            else { continue }
+            guard let source, let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                  let width = props[kCGImagePropertyPixelWidth] as? Int, let height = props[kCGImagePropertyPixelHeight] as? Int else { continue }
+            let format = UTType(type)?.preferredFilenameExtension?.uppercased() ?? "IMAGE"
+            return ImageMetadata(format: format, width: width, height: height, byteCount: count)
+        }
+        return nil
     }
 
     /// A bounded thumbnail for an image representation. Blob-backed images are decoded from their file URL,

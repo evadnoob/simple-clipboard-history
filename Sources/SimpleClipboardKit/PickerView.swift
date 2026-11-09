@@ -7,11 +7,17 @@ final class PickerView: NSView {
     let model: PickerModel
     /// Called with the model's answer to a key or a double-click.
     var onAction: ((PickerAction) -> Void)?
+    /// Called with the stable ID captured when the context menu was opened.
+    var onRemoveClip: ((Int64) -> Void)?
     var onContentChanged: (() -> Void)?
     /// Loads the stored items of a clip for the separate preview.
     var loadItems: ((Int64) -> [[Representation]])?
     /// Loads a downsampled image representation for a visible row only.
     var loadThumbnail: ((Int64, Int) -> NSImage?)?
+    var loadImageMetadata: ((Int64) -> ClipStore.ImageMetadata?)?
+    private enum CachedImageMetadata { case value(ClipStore.ImageMetadata), unavailable }
+    private var imageMetadataCache: [Int64: CachedImageMetadata] = [:]
+    private var imageMetadataUseOrder: [Int64] = []
     /// Shown in the bar: "paste" or "copy", what recall does with the clip.
     var recallVerb = "paste"
     var now: () -> Date = Date.init
@@ -24,6 +30,10 @@ final class PickerView: NSView {
     private var thumbnailUseOrder: [ThumbnailKey] = []
     static let thumbnailCacheLimit = 32
     private var scrollRemainder: CGFloat = 0
+    private var mouseDownPoint: NSPoint?
+    private var mouseDownFrame: NSRect?
+    private var dragBegan = false
+    private var pendingDoubleClick = false
 
     init(model: PickerModel) {
         self.model = model
@@ -40,6 +50,10 @@ final class PickerView: NSView {
 
     /// Actual consecutive lines, including blank lines; nontext stays one compact metadata row.
     func contentLines(for clip: ClipSummary) -> [String] {
+        if clip.kind == "image", let metadata = imageMetadata(for: clip.id) {
+            let lines = ["Image (\(metadata.format))", "\(metadata.width)×\(metadata.height) · \(Format.bytes(metadata.byteCount))"]
+            return Array(lines.prefix(settings.pickerContentLines))
+        }
         guard !clip.contentPreview.isEmpty else { return [clip.preview] }
         return Array(clip.contentPreview.components(separatedBy: "\n").prefix(settings.pickerContentLines))
     }
@@ -48,7 +62,8 @@ final class PickerView: NSView {
         if case .filters = model.step { return InterfaceStyle.rowHeight }
         guard model.rows.indices.contains(index) else { return InterfaceStyle.rowHeight }
         let clip = model.rows[index]
-        let textHeight = CGFloat(contentLines(for: clip).count) * InterfaceStyle.lineHeight + CGFloat(settings.pickerDensity * 2)
+        let lineCount = clip.kind == "image" ? min(settings.pickerContentLines, 2) : contentLines(for: clip).count
+        let textHeight = CGFloat(lineCount) * InterfaceStyle.lineHeight + CGFloat(settings.pickerDensity * 2)
         return clip.kind == "image" ? max(textHeight, 40) : textHeight
     }
 
@@ -127,6 +142,10 @@ final class PickerView: NSView {
 
     private func drawRows(in rect: NSRect) {
         let liveIDs = Set(model.rows.map(\.id))
+        imageMetadataUseOrder.removeAll { id in
+            if !liveIDs.contains(id) { imageMetadataCache.removeValue(forKey: id); return true }
+            return false
+        }
         thumbnailUseOrder.removeAll { key in
             if !liveIDs.contains(key.clipID) { thumbnailCache.removeValue(forKey: key); return true }
             return false
@@ -161,9 +180,9 @@ final class PickerView: NSView {
                                respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
                 textX += 42
             } else if settings.showTypeIcons {
-                InterfaceStyle.drawSymbol(Self.symbolName(for: clip),
-                    in: NSRect(x: textX, y: row.midY - 11, width: 22, height: 22), color: foreground)
-                textX += 32
+                let symbolRect = Self.typeSymbolRect(in: row, x: textX, density: settings.pickerDensity)
+                InterfaceStyle.drawSymbol(Self.symbolName(for: clip), in: symbolRect, color: foreground)
+                textX += symbolRect.width + 10
             }
             let detail = settings.showTimestamps ? Self.rowDetail(clip, now: now()) : ""
             let detailWidth = min(row.width / 3, InterfaceStyle.width(of: detail, font: InterfaceStyle.smallFont))
@@ -180,6 +199,19 @@ final class PickerView: NSView {
                 }
             }
         }
+    }
+
+    /// Type symbols scale with picker density while retaining vertical insets in compact rows.
+    static func typeSymbolRect(in row: NSRect, x: CGFloat, density: Int) -> NSRect {
+        let requestedSize: CGFloat
+        switch density {
+        case 4: requestedSize = 22
+        case 7: requestedSize = 26
+        case 10: requestedSize = 30
+        default: requestedSize = 26
+        }
+        let size = min(requestedSize, max(0, row.height - 2))
+        return NSRect(x: x, y: row.midY - size / 2, width: size, height: size)
     }
 
     private func drawFilterRows(in rect: NSRect) {
@@ -213,6 +245,27 @@ final class PickerView: NSView {
         }
     }
 
+    private func imageMetadata(for clipID: Int64) -> ClipStore.ImageMetadata? {
+        if let cached = imageMetadataCache[clipID] {
+            touchImageMetadata(clipID)
+            if case .value(let metadata) = cached { return metadata }
+            return nil
+        }
+        let cached = loadImageMetadata?(clipID).map(CachedImageMetadata.value) ?? .unavailable
+        imageMetadataCache[clipID] = cached
+        touchImageMetadata(clipID)
+        while imageMetadataUseOrder.count > Self.thumbnailCacheLimit {
+            imageMetadataCache.removeValue(forKey: imageMetadataUseOrder.removeFirst())
+        }
+        if case .value(let metadata) = cached { return metadata }
+        return nil
+    }
+
+    private func touchImageMetadata(_ clipID: Int64) {
+        imageMetadataUseOrder.removeAll { $0 == clipID }
+        imageMetadataUseOrder.append(clipID)
+    }
+
     /// Visible-row thumbnail lookup with a strict per-view LRU bound.
     func thumbnail(for clipID: Int64, pixelSize: Int) -> NSImage? {
         let key = ThumbnailKey(clipID: clipID, pixels: pixelSize)
@@ -239,6 +292,8 @@ final class PickerView: NSView {
     func resetThumbnailCache() {
         thumbnailCache.removeAll(keepingCapacity: true)
         thumbnailUseOrder.removeAll(keepingCapacity: true)
+        imageMetadataCache.removeAll(keepingCapacity: true)
+        imageMetadataUseOrder.removeAll(keepingCapacity: true)
     }
 
     static func aspectFitRect(for imageSize: NSSize, in slot: NSRect) -> NSRect {
@@ -463,11 +518,74 @@ final class PickerView: NSView {
         }
     }
 
-    override func mouseDown(with event: NSEvent) {
-        guard let index = rowIndex(at: convert(event.locationInWindow, from: nil)) else { return }
+    override func menu(for event: NSEvent) -> NSMenu? {
+        contextMenu(at: convert(event.locationInWindow, from: nil))
+    }
+
+    /// Returns a native context menu only for a visible clip row, never filter/footer/empty space.
+    func contextMenu(at point: NSPoint) -> NSMenu? {
+        guard case .clips = model.step, let index = rowIndex(at: point), model.rows.indices.contains(index) else { return nil }
         model.select(index)
         needsDisplay = true
-        if event.clickCount >= 2 { perform(.enter) }
+        let id = model.rows[index].id
+        let menu = NSMenu()
+        let item = NSMenuItem(title: "Remove from history", action: #selector(removeContextClip(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = NSNumber(value: id)
+        menu.addItem(item)
+        return menu
+    }
+
+    @objc private func removeContextClip(_ sender: NSMenuItem) {
+        guard let number = sender.representedObject as? NSNumber else { return }
+        onRemoveClip?(number.int64Value)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        guard Self.canBeginWindowDrag(at: point, in: bounds) else { return }
+        mouseDownPoint = window?.convertPoint(toScreen: event.locationInWindow)
+        mouseDownFrame = window?.frame
+        dragBegan = false
+        pendingDoubleClick = false
+        if let index = rowIndex(at: point) {
+            model.select(index)
+            pendingDoubleClick = event.clickCount >= 2
+            needsDisplay = true
+        }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let window, let startPoint = mouseDownPoint, let startFrame = mouseDownFrame else { return }
+        let point = window.convertPoint(toScreen: event.locationInWindow)
+        let dx = point.x - startPoint.x, dy = point.y - startPoint.y
+        if !dragBegan {
+            guard Self.shouldBeginWindowDrag(from: startPoint, to: point) else { return }
+            dragBegan = true
+            pendingDoubleClick = false
+        }
+        window.setFrameOrigin(NSPoint(x: startFrame.minX + dx, y: startFrame.minY + dy))
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        defer { mouseDownPoint = nil; mouseDownFrame = nil; dragBegan = false }
+        if pendingDoubleClick && !dragBegan { perform(.enter) }
+        pendingDoubleClick = false
+    }
+
+    static let windowDragThreshold: CGFloat = 4
+
+    /// Corner resize views are layered over these edge areas; they retain priority over window dragging.
+    static func canBeginWindowDrag(at point: NSPoint, in bounds: NSRect) -> Bool {
+        guard bounds.contains(point) else { return false }
+        let corner = WindowCornerView.size
+        let inCorner = (point.x < corner || point.x >= bounds.maxX - corner)
+            && (point.y < corner || point.y >= bounds.maxY - corner)
+        return !inCorner
+    }
+
+    static func shouldBeginWindowDrag(from start: NSPoint, to current: NSPoint) -> Bool {
+        hypot(current.x - start.x, current.y - start.y) >= windowDragThreshold
     }
 
     override func scrollWheel(with event: NSEvent) {

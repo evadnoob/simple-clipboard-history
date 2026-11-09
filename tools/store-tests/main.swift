@@ -39,6 +39,27 @@ let right = thumbnailRep.colorAt(x: thumbnailRep.pixelsWide - 1, y: thumbnailRep
 check(left.redComponent > right.redComponent && right.greenComponent > left.greenComponent,
       "thumbnail preserves distinct red and green fixture pixels")
 
+// Stored image metadata uses actual representation bytes and ImageIO pixel properties.
+func encodedImage(width: Int, height: Int, type: NSBitmapImageRep.FileType) -> Data {
+    let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
+                               bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                               colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+    return rep.representation(using: type, properties: [:])!
+}
+for (w, h, fileType, pasteType, expected) in [
+    (120, 80, NSBitmapImageRep.FileType.png, NSPasteboard.PasteboardType.png.rawValue, "PNG"),
+    (37, 91, NSBitmapImageRep.FileType.png, NSPasteboard.PasteboardType.png.rawValue, "PNG"),
+    (64, 48, NSBitmapImageRep.FileType.jpeg, "public.jpeg", "JPEG"),
+] {
+    let bytes = encodedImage(width: w, height: h, type: fileType)
+    let id = try! thumbnailStore.record(CapturedClip(items: [[Representation(type: pasteType, data: bytes)]]), at: Date(timeIntervalSince1970: 1_800_000_000))
+    let metadata = thumbnailStore.imageMetadata(for: id)
+    check(metadata?.format == expected && metadata?.width == w && metadata?.height == h && metadata?.byteCount == bytes.count,
+          "image metadata reports actual format, dimensions and representation byte count")
+}
+let corruptID = try! thumbnailStore.record(CapturedClip(items: [[Representation(type: NSPasteboard.PasteboardType.png.rawValue, data: Data([1, 2, 3]))]]), at: Date(timeIntervalSince1970: 1_800_000_000))
+check(thumbnailStore.imageMetadata(for: corruptID) == nil, "corrupt image metadata has truthful unavailable fallback")
+
 // MARK: captured clip
 let multiline = textClip("  first line\n\n  second\tline  ")
 check(multiline.preview == "first line second line", "preview collapses whitespace")

@@ -1,19 +1,37 @@
 #!/bin/bash
-# Build a release binary and wrap it in SimpleClipboard.app (no Xcode needed).
+# Build and package an ad-hoc signed development app without accessing the keychain.
 set -euo pipefail
 cd "$(dirname "$0")"
-# Only the app: the test harness products use @testable import and do not build in release.
 swift build -c release --product SimpleClipboard
 app=SimpleClipboard.app
-rm -rf "$app"
-mkdir -p "$app/Contents/MacOS"
-cp .build/release/SimpleClipboard "$app/Contents/MacOS/SimpleClipboard"
-cat > "$app/Contents/Info.plist" <<PLIST
+icon=Resources/AppIcon.icns
+if [[ ! -f "$icon" ]]; then
+    echo "Missing $icon; generate it with swift tools/generate-app-icon.swift." >&2
+    exit 1
+fi
+stage=$(mktemp -d "./.SimpleClipboard.build.XXXXXX")
+backup="${app}.previous.$$"
+restore=0
+cleanup() {
+    status=$?
+    if (( restore )); then
+        rm -rf "$app"
+        if [[ -e "$backup" ]]; then mv "$backup" "$app"; fi
+    fi
+    rm -rf "$stage"
+    exit "$status"
+}
+trap cleanup EXIT
+mkdir -p "$stage/$app/Contents/MacOS" "$stage/$app/Contents/Resources"
+cp .build/release/SimpleClipboard "$stage/$app/Contents/MacOS/SimpleClipboard"
+cp "$icon" "$stage/$app/Contents/Resources/AppIcon.icns"
+cat > "$stage/$app/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>CFBundleExecutable</key><string>SimpleClipboard</string>
 <key>CFBundleIdentifier</key><string>com.evadnoob.simple-clipboard</string>
+<key>CFBundleIconFile</key><string>AppIcon</string>
 <key>CFBundleName</key><string>Simple Clipboard</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>0.1</string>
@@ -23,17 +41,9 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
-# Sign with a fixed identity so macOS keeps the Accessibility permission across rebuilds (an ad-hoc signature
-# changes with every build). Create the identity once with tools/create-signing-identity.sh. Without it, the build
-# is signed ad-hoc and still runs.
-identity=${SIGNING_IDENTITY:-evadnoob Local Code Signing}
-if security find-identity -p codesigning | grep -qF "\"$identity\""; then
-    codesign --force -s "$identity" "$app"
-    echo "Signed with \"$identity\""
-else
-    echo "warning: code signing identity \"$identity\" not found; signing ad-hoc. Accessibility permission will not" >&2
-    echo "         survive rebuilds. Create the identity with: bash tools/create-signing-identity.sh" >&2
-    codesign --force -s - "$app"
-fi
-codesign --verify --strict "$app"
-echo "Built $app"
+codesign --force -s - "$stage/$app"
+codesign --verify --strict "$stage/$app"
+if [[ -e "$app" ]]; then mv "$app" "$backup"; restore=1; fi
+mv "$stage/$app" "$app"
+if (( restore )); then rm -rf "$backup"; restore=0; fi
+echo "Built ad-hoc signed $app"

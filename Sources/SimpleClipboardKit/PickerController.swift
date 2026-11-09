@@ -134,7 +134,9 @@ final class PickerController: NSObject, NSWindowDelegate {
         view.onContentChanged = { [weak self] in self?.resizeToContent() }
         view.loadItems = { id in (try? store.items(for: id)) ?? [] }
         view.loadThumbnail = { id, pixelSize in try? store.thumbnail(for: id, maximumPixelSize: pixelSize) }
+        view.loadImageMetadata = { id in store.imageMetadata(for: id) }
         view.onAction = { [weak self] action in self?.handle(action) }
+        view.onRemoveClip = { [weak self] id in self?.removeClip(id) }
     }
 
     var isOpen: Bool { panel.isVisible }
@@ -172,6 +174,17 @@ final class PickerController: NSObject, NSWindowDelegate {
         case .close: close()
         case .recall(let id, let format): recall(id, format: format)
         }
+    }
+
+    private func removeClip(_ id: Int64) {
+        guard model.removeClip(id: id, delete: { try store.delete($0) }) else {
+            NSSound.beep()
+            return
+        }
+        view.resetThumbnailCache()
+        view.updateRowCount()
+        view.needsDisplay = true
+        resizeToContent()
     }
 
     private func recall(_ id: Int64, format: RecallFormat) {

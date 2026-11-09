@@ -51,8 +51,7 @@ final class StatusItemController: NSObject, NSWindowDelegate {
 
     /// A template image, so macOS colors it for the menu bar in light and dark mode.
     static let icon: NSImage = {
-        let image = NSImage(systemSymbolName: "clipboard", accessibilityDescription: "Simple Clipboard")
-            ?? NSImage(size: NSSize(width: 16, height: 16))
+        let image = ClipboardIcon.image(size: NSSize(width: 16, height: 17.33), accessibilityDescription: "Simple Clipboard")
         image.isTemplate = true
         return image
     }()

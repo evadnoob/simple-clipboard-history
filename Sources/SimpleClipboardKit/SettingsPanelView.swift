@@ -143,11 +143,12 @@ final class SettingsPanelView: NSView {
         controls = []
         var container = settingsBody
         let gap = InterfaceStyle.gap
+        let rowInset: CGFloat = 16
         let rowHeight: CGFloat = 22
         let controlHeight: CGFloat = 24
         let width = Self.width
         let labelWidth: CGFloat = 154
-        let valueX = gap + labelWidth
+        let valueX = rowInset + labelWidth
         let settings = content.settings
         var y: CGFloat = 0
 
@@ -188,14 +189,16 @@ final class SettingsPanelView: NSView {
             let control = PanelCheckbox(partName: name, title: title, isOn: on)
             control.onChange = change
             if name == "paste" { control.toolTip = "When off, choosing an item only restores the clipboard; press Command-V to paste." }
-            add(control, x: gap, height: rowHeight)
+            let availableWidth = name == "pause" && content.hotkeyLabel != nil
+                ? width - rowInset * 2 - 72 - gap : width - rowInset * 2
+            add(control, x: rowInset, width: availableWidth, height: rowHeight)
             y += rowHeight
         }
         func dropdown(_ name: String, _ label: String, _ titles: [String], _ selected: Int?, _ change: @escaping (Int) -> Void) {
-            text(label, x: gap, width: labelWidth, height: controlHeight, color: .labelColor)
+            text(label, x: rowInset, width: labelWidth, height: controlHeight, color: .labelColor)
             let control = PanelDropdown(partName: name, label: label, titles: titles, selectedIndex: selected)
             control.onChange = change
-            add(control, x: valueX, width: width - valueX - gap)
+            add(control, x: valueX, width: width - valueX - rowInset)
             y += controlHeight
         }
         func integerChoice(_ name: String, _ label: String, _ values: [Int], _ value: Int,
@@ -204,17 +207,18 @@ final class SettingsPanelView: NSView {
             dropdown(name, label, choices.map { $0.formatted() }, choices.firstIndex(of: value)) { change(choices[$0]) }
         }
         func integerInput(_ name: String, _ label: String, _ value: Int, _ change: @escaping (Int) -> Void) {
-            text(label, x: gap, width: labelWidth, height: controlHeight, color: .labelColor)
+            text(label, x: rowInset, width: labelWidth, height: controlHeight, color: .labelColor)
             let control = PanelIntegerField(partName: name, label: label, value: value)
             control.onCommit = change
             control.onTab = { [weak self] in self?.moveFocus(by: 1) }
-            add(control, x: valueX, width: width - valueX - gap)
+            add(control, x: valueX, width: width - valueX - rowInset)
             y += controlHeight
         }
 
-        let header = SettingsPanelHeaderView(frame: NSRect(x: 0, y: 0, width: width, height: 76))
-        let icon = NSImageView(frame: NSRect(x: gap, y: 8, width: 24, height: 24))
-        icon.image = NSImage(systemSymbolName: "clipboard", accessibilityDescription: "Clipboard")
+        let header = SettingsPanelHeaderView(frame: NSRect(x: 0, y: 0, width: width, height: 64))
+        let icon = NSImageView(frame: NSRect(x: gap, y: 8, width: 24, height: 26))
+        icon.image = ClipboardIcon.image(size: NSSize(width: 24, height: 26), accessibilityDescription: "Clipboard")
+        icon.imageScaling = .scaleAxesIndependently
         icon.contentTintColor = .labelColor
         icon.setAccessibilityLabel("Clipboard")
         header.addSubview(icon)
@@ -226,8 +230,8 @@ final class SettingsPanelView: NSView {
         title.setAccessibilityLabel("Simple Clipboard History")
         header.addSubview(title)
         let chart = CopyActivityChartView(days: 5, now: content.now, buckets: content.copyActivity)
-        chart.frame = NSRect(x: width - 68, y: 9, width: 54, height: 31)
-        chart.setAccessibilityLabel("Copy activity over the last 5 days, hourly")
+        chart.frame = NSRect(x: width - 68, y: 9, width: 54, height: 17)
+        chart.setAccessibilityLabel("Copy activity over the last 5 days, in 20-hour groups")
         header.addSubview(chart)
         activityChart = chart
         let stats = content.statistics
@@ -240,12 +244,12 @@ final class SettingsPanelView: NSView {
         for (index, group) in groups.enumerated() {
             let label = NSTextField(labelWithString: group.0)
             label.font = .systemFont(ofSize: 12, weight: .semibold)
-            label.frame = NSRect(x: group.1, y: 48, width: group.2, height: 18)
+            label.frame = NSRect(x: group.1, y: 40, width: group.2, height: 18)
             label.setAccessibilityIdentifier("headerStat:\(index)")
             label.setAccessibilityLabel(group.0)
             header.addSubview(label)
             if index == 0 {
-                let square = NSView(frame: NSRect(x: gap, y: 53, width: 10, height: 10))
+                let square = NSView(frame: NSRect(x: gap, y: 45, width: 10, height: 10))
                 square.wantsLayer = true
                 square.layer?.backgroundColor = (settings.capturePaused ? NSColor.secondaryLabelColor : NSColor.systemGreen).cgColor
                 square.setAccessibilityLabel(state)
@@ -253,17 +257,27 @@ final class SettingsPanelView: NSView {
             }
             if index < 2 {
                 let dividerX = index == 0 ? 100 : 207
-                let divider = NSView(frame: NSRect(x: dividerX, y: 48, width: 1, height: 18))
+                let divider = NSView(frame: NSRect(x: dividerX, y: 40, width: 1, height: 18))
                 divider.wantsLayer = true
                 divider.layer?.backgroundColor = NSColor.separatorColor.cgColor
                 header.addSubview(divider)
             }
         }
         container.addSubview(header)
-        y += 78
+        y += 66
         section("History")
         checkbox("pause", "Keep clipboard history", !settings.capturePaused) { [weak self] on in
             self?.actions.update { $0.capturePaused = !on }
+        }
+        if let shortcut = content.hotkeyLabel {
+            let hint = NSTextField(labelWithString: shortcut)
+            hint.font = .systemFont(ofSize: 12)
+            hint.alignment = .right
+            hint.textColor = .secondaryLabelColor
+            hint.frame = NSRect(x: width - rowInset - 72, y: y - rowHeight + 2, width: 72, height: 18)
+            hint.setAccessibilityLabel("Picker shortcut \(shortcut)")
+            hint.setAccessibilityIdentifier("pickerShortcutHint")
+            settingsBody.addSubview(hint)
         }
         checkbox("login", "Launch at login", content.loginEnabled) { [weak self] on in self?.actions.setLoginEnabled(on) }
         if let message = content.loginMessage {
@@ -273,12 +287,8 @@ final class SettingsPanelView: NSView {
             add(notice, x: gap, width: width - gap * 2, height: rowHeight)
             y += rowHeight
         }
-        dropdown("hotkey", "Picker shortcut", Self.hotkeyTitles.map(\.1),
-                 Self.hotkeyTitles.firstIndex { $0.0 == settings.pickerHotkey }) { [weak self] index in
-            self?.actions.update { $0.pickerHotkey = Self.hotkeyTitles[index].0 }
-        }
         // Ignored apps.
-        text("Ignored apps", x: gap, width: labelWidth, color: .secondaryLabelColor)
+        text("Ignored apps", x: rowInset, width: labelWidth, color: .secondaryLabelColor)
         var listedAny = false
         for identifier in settings.ignoredApps {
             let name = content.appNames[identifier] ?? identifier
@@ -562,7 +572,7 @@ final class SettingsPanelHeaderView: NSView {
     override var isFlipped: Bool { true }
 }
 
-/// One blue bar per absolute hourly interval in a rolling UTC window.
+/// One blue bar per 20-hour group of absolute hourly intervals in a rolling UTC window.
 final class CopyActivityChartView: NSView {
     let days: Int
     let now: Date
@@ -575,12 +585,16 @@ final class CopyActivityChartView: NSView {
         setAccessibilityRole(.image)
     }
     required init?(coder: NSCoder) { fatalError("not used") }
+    override var isFlipped: Bool { true }
 
     var showsRangeCaptions: Bool { bounds.width >= 100 }
 
-    /// Exactly one horizontal slot per hourly interval. The last slot is always the current hour.
+    private let hoursPerGroup = 20
+
+    /// Groups consecutive hours in the rolling window; the newest group includes the current hour.
     var intervalRects: [NSRect] {
-        let intervalCount = max(0, min(days, 10)) * 24
+        let hourlyCount = max(0, min(days, 10)) * 24
+        let intervalCount = hourlyCount == 0 ? 0 : (hourlyCount + hoursPerGroup - 1) / hoursPerGroup
         guard intervalCount > 0, bounds.width.isFinite, bounds.width > 0 else { return [] }
         let slotWidth = bounds.width / CGFloat(intervalCount)
         let gap = min(1, slotWidth * 0.12)
@@ -595,12 +609,20 @@ final class CopyActivityChartView: NSView {
         let count = intervalRects.count
         guard count > 0, bounds.height.isFinite, bounds.height > 14 else { return [] }
         let endHour = Int64(floor(now.timeIntervalSince1970 / 3600))
-        let startHour = endHour - Int64(count - 1)
-        let values = Dictionary(buckets.map { ($0.hour, $0.copies) }, uniquingKeysWith: max)
-        let maximum = max(1, values.values.filter { $0 > 0 }.max() ?? 0)
+        let hourlyCount = max(0, min(days, 10)) * 24
+        let startHour = endHour - Int64(hourlyCount - 1)
+        var values: [Int: Int] = [:]
+        for bucket in buckets where bucket.copies > 0 {
+            let offset = bucket.hour - startHour
+            guard offset >= 0, offset < Int64(hourlyCount) else { continue }
+            let group = Int(offset) / hoursPerGroup
+            let (sum, overflow) = values[group, default: 0].addingReportingOverflow(bucket.copies)
+            values[group] = overflow ? Int.max : sum
+        }
+        let maximum = max(1, values.values.max() ?? 0)
         let captionHeight: CGFloat = bounds.width < 100 ? 0 : 14
         return intervalRects.enumerated().compactMap { index, slot in
-            let value = values[startHour + Int64(index)] ?? 0
+            let value = values[index] ?? 0
             guard value > 0 else { return nil }
             let height = (bounds.height - captionHeight) * CGFloat(value) / CGFloat(maximum)
             guard height.isFinite, height > 0 else { return nil }

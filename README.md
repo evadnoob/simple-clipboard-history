@@ -42,20 +42,15 @@ bash bundle.sh
 open SimpleClipboard.app
 ```
 
-Automatic paste requires **System Settings > Privacy & Security > Accessibility** permission for Simple Clipboard. Without it, recall still restores the clipboard; press Command-V yourself. Some apps may reject simulated paste or particular clipboard representations.
+Automatic paste requires **System Settings > Privacy & Security > Accessibility** permission for Simple Clipboard. Without it, recall still restores the clipboard; press Command-V yourself. Some apps may reject simulated paste or particular clipboard representations. macOS may require renewing Accessibility permission after development rebuilds.
 
-### Stable local signing
-
-To keep a consistent signing identity across rebuilds, create a local identity once per machine:
+`bash bundle.sh` builds and strictly verifies an ad-hoc signed development app. It does not access the keychain or prompt for a signing password. When you are ready to use an existing stable identity, manually sign the already-built bundle:
 
 ```bash
-bash tools/create-signing-identity.sh
-bash bundle.sh
+bash tools/sign-app.sh
 ```
 
-This adds a self-signed certificate and private key named `evadnoob Local Code Signing` to your login keychain. When macOS asks whether `codesign` may use the key, choose **Always Allow**. The certificate can appear as `CSSMERR_TP_NOT_TRUSTED`; it does not need system trust for local signing.
-
-`bundle.sh` uses that identity, or the value of `SIGNING_IDENTITY`. If the identity is missing, it warns and signs ad-hoc. Switching signing identities can require granting Accessibility again. Permission persistence across rebuilds still needs live validation.
+The default identity is `evadnoob Local Code Signing`. To choose another existing identity, run `SIGNING_IDENTITY="Your Identity Name" bash tools/sign-app.sh`. This command signs only the existing bundle; it does not build or create identities. Missing identities or signing errors fail without an ad-hoc fallback. A stable manually signed build remains available, but Accessibility permission persistence is not guaranteed.
 
 ## Privacy and storage
 
