@@ -54,9 +54,9 @@ func render() -> NSBitmapImageRep {
 // MARK: layout
 check(view.frame.width == SettingsPanelView.width && view.frame.height == view.preferredHeight, "view sized to its content")
 check(view.preferredHeight > 300 && view.preferredHeight < 760, "height is reasonable (\(view.preferredHeight))")
-check(view.controls.map(\.partName) == ["copyActivityDays", "pause", "login", "hotkey", "ignoreFrontmost", "paste", "plainText", "pasteSpecial",
-    "keep", "largest", "historySize", "clearHistory", "import", "export", "pickerWidth", "contentLines", "density",
-    "visibleItems", "typeIcons", "timestamps", "openPicker", "quit"], "four sections in order")
+check(view.controls.map(\.partName) == ["pause", "login", "ignoreFrontmost", "paste", "plainText", "pasteSpecial",
+    "keep", "largest", "historySize", "pickerWidth", "contentLines", "density",
+    "visibleItems", "typeIcons", "timestamps", "clearHistory", "export", "import", "settings", "openPicker", "quit"], "panel controls follow settings sections and footer actions")
 check(view.controls.allSatisfy { view.bounds.contains($0.convert($0.bounds, to: view)) }, "every control inside the panel")
 for (index, control) in view.controls.enumerated() {
     for other in view.controls[(index + 1)...] where control.convert(control.bounds, to: view).intersects(other.convert(other.bounds, to: view)) {
@@ -64,7 +64,7 @@ for (index, control) in view.controls.enumerated() {
     }
 }
 check(checkbox("paste")?.isOn == true && choices("plainText")?.selectedIndex == 0 && checkbox("pause")?.isOn == true, "checkbox states")
-check(choices("hotkey")?.selectedIndex == 0 && choices("hotkey")?.titles.last == "None", "hotkey choices")
+check(choices("hotkey") == nil, "shortcut editing is deferred from the panel")
 check(choices("plainText")?.titles == ["Preserve original formatting", "Paste as plain text"], "exact paste representation labels")
 check(!view.controls.contains { $0.partName == "retention" }, "legacy retention setting is not shown")
 check(NSImage(systemSymbolName: "clipboard", accessibilityDescription: nil) != nil, "empty clipboard outline symbol is available")
@@ -85,21 +85,172 @@ check(choices("largest")?.titles == ["5", "20", "50", "100"] && choices("largest
 check(button("openPicker")?.title == "Open Picker  \u{21E7}\u{2318}V", "open picker shows the hotkey")
 check(button("ignoreFrontmost")?.title == "+ Ignore kitty", "ignore the frontmost app")
 check(render().pixelsWide > 0, "panel draws")
+let panelDocument = view.scrollView.documentView!
+let shortcutHint = panelDocument.subviews.compactMap { $0 as? NSTextField }
+    .first { $0.accessibilityIdentifier() == "pickerShortcutHint" }
+check(shortcutHint?.stringValue == "\u{21E7}\u{2318}V" && shortcutHint?.alignment == .right
+    && shortcutHint!.frame.maxX <= SettingsPanelView.width - 16
+    && checkbox("pause")!.frame.maxX <= shortcutHint!.frame.minX - 8,
+      "History row displays the current picker shortcut as a right-aligned inset hint with a clear gap")
+let rowLabels = panelDocument.subviews.compactMap { $0 as? NSTextField }
+check(rowLabels.contains { $0.frame.minX == 16 && ($0.stringValue.contains("Default paste") || $0.stringValue == "Ignored apps") },
+      "setting labels share the 16-point content inset")
+let titleLabel = panelDocument.subviews.compactMap { $0.subviews.compactMap { $0 as? NSTextField } }.flatMap { $0 }
+    .first { $0.accessibilityIdentifier() == "panelTitle" }
+let headerIcon = panelDocument.subviews.compactMap(\.subviews).flatMap { $0 }.compactMap { $0 as? NSImageView }
+    .first { $0.accessibilityLabel() == "Clipboard" }
+check(titleLabel?.stringValue == "Simple Clipboard History" && titleLabel?.font?.fontDescriptor.symbolicTraits.contains(.bold) == true,
+      "bold accessible panel title is present")
+let header = panelDocument.subviews.first { $0.subviews.contains { ($0 as? NSTextField)?.accessibilityIdentifier() == "panelTitle" } }!
+let titleSize = (titleLabel!.stringValue as NSString).size(withAttributes: [.font: titleLabel!.font!])
+let titleInDocument = titleLabel!.convert(titleLabel!.bounds, to: panelDocument)
+let iconInDocument = headerIcon!.convert(headerIcon!.bounds, to: panelDocument)
+let chartInDocument = view.activityChart!.convert(view.activityChart!.bounds, to: panelDocument)
+let titleDocumentRect = titleInDocument
+let topRow = titleDocumentRect.union(iconInDocument).union(chartInDocument)
+check(titleSize.width <= titleLabel!.frame.width && titleLabel!.frame.width >= 270,
+      "16-point bold title intrinsic width fits its allocated field")
+check(headerIcon?.image != nil && headerIcon?.imageScaling == .scaleAxesIndependently
+    && headerIcon?.frame.size == NSSize(width: 24, height: 26) && !iconInDocument.intersects(titleDocumentRect)
+    && !titleDocumentRect.intersects(chartInDocument) && header.isFlipped,
+      "flipped header places icon, full title, and graph in a non-overlapping top row")
+check(view.activityChart?.frame.width == 54 && view.activityChart?.frame.height == 17
+    && view.activityChart?.days == 5 && view.activityChart!.frame.maxX < SettingsPanelView.width,
+      "compact fixed five-day graph fits at the upper right")
+let compactChart = CopyActivityChartView(days: 5, now: now, buckets: [(hour: activityHour, copies: 3)])
+compactChart.frame = NSRect(x: 0, y: 0, width: 54, height: 17)
+check(compactChart.isFlipped && compactChart.intervalRects.count == 6 && compactChart.renderedBarRects.count == 1
+    && compactChart.renderedBarRects.allSatisfy { compactChart.bounds.contains($0) },
+      "compact five-day graph aggregates 120 hours into six visible bars")
+check(compactChart.intervalRects.allSatisfy { $0.width >= 7 && compactChart.bounds.contains($0) },
+      "54-point chart has broad bars within bounds")
+let actualSizeChart = CopyActivityChartView(days: 5, now: now, buckets: [(hour: activityHour, copies: 3)])
+actualSizeChart.frame = NSRect(x: 0, y: 0, width: 54, height: 17)
+check(actualSizeChart.renderedBarRects.count == 1 && actualSizeChart.renderedBarRects[0].height == 17
+    && actualSizeChart.bounds.contains(actualSizeChart.renderedBarRects[0]),
+      "17-point production graph shows an in-bounds observed bar")
+let twentyHourCases = CopyActivityChartView(days: 5, now: now, buckets: [
+    (hour: activityHour - 119, copies: 4), (hour: activityHour - 118, copies: 6),
+    (hour: activityHour - 100, copies: 10),
+    (hour: activityHour - 99, copies: 20),
+    (hour: activityHour - 79, copies: 5), (hour: activityHour - 78, copies: 5),
+    (hour: activityHour, copies: 7)
+])
+twentyHourCases.frame = NSRect(x: 0, y: 0, width: 54, height: 31)
+let groupedRects = twentyHourCases.renderedBarRects
+check(groupedRects.count == 4 && abs(groupedRects[0].height - 31) < 0.01
+    && abs(groupedRects[1].height - 31) < 0.01
+    && abs(groupedRects[2].height - 15.5) < 0.01
+    && abs(groupedRects[3].height - 10.85) < 0.01
+    && groupedRects.map(\.minX) == [0, 9, 18, 45]
+    && groupedRects.allSatisfy { $0.maxY == twentyHourCases.bounds.height },
+      "hourly sums form 20:20:10:7 bars, with neighboring group boundaries separate")
+let excludedChart = CopyActivityChartView(days: 5, now: now, buckets: [
+    (hour: activityHour - 120, copies: 9), (hour: activityHour, copies: 2),
+    (hour: activityHour + 1, copies: Int.max)
+])
+excludedChart.frame = NSRect(x: 0, y: 0, width: 54, height: 31)
+check(excludedChart.renderedBarRects.count == 1 && excludedChart.renderedBarRects[0].height == 31
+    && excludedChart.renderedBarRects[0].minX == excludedChart.intervalRects[5].minX,
+      "out-of-window and future counts cannot affect included activity or its scale")
+for width: CGFloat in [54, 72, 96, 160] {
+    let resized = CopyActivityChartView(days: 5, now: now, buckets: [(hour: activityHour, copies: 1)])
+    resized.frame = NSRect(x: 0, y: 0, width: width, height: 31)
+    check(resized.intervalRects.count == 6 && resized.intervalRects.allSatisfy {
+        $0.width >= 7 && $0.minX >= 0 && $0.maxX <= width
+    } && resized.renderedBarRects.allSatisfy { resized.bounds.contains($0) },
+          "20-hour bar geometry remains valid at width \\(Int(width))")
+}
+check(!compactChart.showsRangeCaptions && compactChart.renderedBarRects[0].height == compactChart.bounds.height,
+      "compact chart omits colliding captions and uses full height for observed bars")
+let compactBitmap = compactChart.bitmapImageRepForCachingDisplay(in: compactChart.bounds)!
+compactChart.cacheDisplay(in: compactChart.bounds, to: compactBitmap)
+let compactBluePixels = (0..<compactBitmap.pixelsHigh).contains { y in
+    (max(0, compactBitmap.pixelsWide - 3)..<compactBitmap.pixelsWide).contains { x in
+        guard let color = compactBitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { return false }
+        return color.blueComponent > color.redComponent + 0.1
+    }
+}
+check(compactBitmap.pixelsWide > 0 && compactBluePixels,
+      "compact current-hour graph paints an observed blue bar at the actual header size")
+let compactEmpty = CopyActivityChartView(days: 5, now: now, buckets: [])
+compactEmpty.frame = NSRect(x: 0, y: 0, width: 54, height: 31)
+let compactEmptyBitmap = compactEmpty.bitmapImageRepForCachingDisplay(in: compactEmpty.bounds)!
+compactEmpty.cacheDisplay(in: compactEmpty.bounds, to: compactEmptyBitmap)
+let compactEmptyBlue = (0..<compactEmptyBitmap.pixelsHigh).contains { y in
+    (max(0, compactEmptyBitmap.pixelsWide - 3)..<compactEmptyBitmap.pixelsWide).contains { x in
+        guard let color = compactEmptyBitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { return false }
+        return color.blueComponent > color.redComponent + 0.1
+    }
+}
+check(!compactEmptyBlue && compactEmpty.renderedBarRects.isEmpty,
+      "compact empty graph renders without fabricated blue bars")
+let headerLabels = panelDocument.subviews.compactMap(\.subviews).flatMap { $0 }.compactMap { $0 as? NSTextField }
+check(headerLabels.filter { $0.accessibilityIdentifier().hasPrefix("headerStat:") }.count == 3,
+      "header exposes three distinct accessible statistic groups")
+let statLabels = headerLabels.filter { $0.accessibilityIdentifier().hasPrefix("headerStat:") }
+let statRects = statLabels.map { $0.convert($0.bounds, to: panelDocument) }
+let dividerRects = header.subviews.filter { $0.frame.width == 1 && $0.frame.height == 18 }.map {
+    $0.convert($0.bounds, to: panelDocument)
+}
+check(statRects.allSatisfy { topRow.maxY <= $0.minY && $0.minX >= 8 && $0.maxX <= SettingsPanelView.width - 8 }
+    && statRects.allSatisfy { rect in
+        guard let label = statLabels.first(where: { $0.convert($0.bounds, to: panelDocument) == rect }), let font = label.font else { return false }
+        return (label.stringValue as NSString).size(withAttributes: [.font: font]).width <= label.frame.width
+    }, "stat row is below title/chart and every label fits its actual font frame")
+check(dividerRects.count == 2 && dividerRects.allSatisfy { divider in statRects.allSatisfy { !$0.intersects(divider) } }
+    && statRects[1].maxX < dividerRects[1].minX && dividerRects[1].maxX < statRects[2].minX,
+      "both vertical separators have gaps and do not overlap adjacent statistic text")
+check(headerLabels.contains { $0.stringValue == "Active" } && headerLabels.contains { $0.stringValue.contains("142 items") }
+    && headerLabels.contains { $0.stringValue.contains("/") && $0.stringValue.contains("%") },
+      "header groups show active state, count, and used/max percentage")
+let headerDividers = panelDocument.subviews.compactMap(\.subviews).flatMap { $0 }.filter {
+    $0.frame.width == 1 && $0.frame.height == 18 && $0.wantsLayer
+}
+check(headerDividers.count >= 2, "header statistic groups have vertical dividers")
+check(!view.controls.contains { $0.partName == "copyActivityDays" }
+    && !panelDocument.subviews.contains { ($0 as? NSTextField)?.stringValue.hasPrefix("Clipboard:") == true },
+      "no activity range selector or clipboard status row")
 check(view.activityChart?.days == 5 && view.activityChart?.buckets.first?.hour == activityHour
-      && view.activityChart?.buckets.first?.copies == 3, "production activity chart receives hourly aggregate data and selected range")
+      && view.activityChart?.buckets.first?.copies == 3, "production activity chart receives stored hourly data with fixed range")
+var zeroStatsContent = content()
+zeroStatsContent.statistics = StoreStatistics(clipCount: 0, clipBytes: 0, diskBytes: 0, oldestCopiedAt: nil, latest: nil)
+view.show(zeroStatsContent)
+let zeroStatLabels = (view.scrollView.documentView!.subviews.compactMap(\.subviews).flatMap { $0 }).compactMap { $0 as? NSTextField }
+check(zeroStatLabels.contains { $0.stringValue == "0 items" } && zeroStatLabels.contains { $0.stringValue.contains("(0%)") },
+      "empty history displays zero items and safe zero percentage")
+var largeStatsContent = content()
+largeStatsContent.statistics = StoreStatistics(clipCount: 12_345_678, clipBytes: 400_000_000, diskBytes: 0, oldestCopiedAt: nil, latest: nil)
+view.show(largeStatsContent)
+let largeLabels = view.scrollView.documentView!.subviews.compactMap(\.subviews).flatMap { $0 }.compactMap { $0 as? NSTextField }
+check(largeLabels.contains { $0.stringValue == "12.3M items" }, "large valid history counts use a compact readable label")
+let largeCount = largeLabels.first { $0.accessibilityIdentifier() == "headerStat:1" }!
+check((largeCount.stringValue as NSString).size(withAttributes: [.font: largeCount.font!]).width <= largeCount.frame.width,
+      "large count text fits its statistic group")
+var unavailableStatsContent = content()
+unavailableStatsContent.statistics = nil
+view.show(unavailableStatsContent)
+let unavailableStatLabels = view.scrollView.documentView!.subviews.compactMap(\.subviews).flatMap { $0 }.compactMap { $0 as? NSTextField }
+check(unavailableStatLabels.contains { $0.stringValue == "Unavailable items" }
+    && unavailableStatLabels.contains { $0.stringValue == "Unavailable" }, "unavailable statistics are explicit and safe")
+var pausedStatsContent = content()
+pausedStatsContent.settings.capturePaused = true
+view.show(pausedStatsContent)
+let pausedLabels = (view.scrollView.documentView!.subviews.compactMap(\.subviews).flatMap { $0 }).compactMap { $0 as? NSTextField }
+check(pausedLabels.contains { $0.stringValue == "Paused" }, "paused capture remains meaningful in header")
+view.show(content())
 for days in Settings.copyActivityDayChoices {
     let chart = CopyActivityChartView(days: days, now: now, buckets: [])
     chart.frame = NSRect(x: 0, y: 0, width: SettingsPanelView.width - 16, height: 43)
     let slots = chart.intervalRects
-    check(slots.count == days * 24, "\(days)-day chart keeps one slot per hour")
+    check(slots.count == (days * 24 + 19) / 20, "\(days)-day chart keeps one slot per 20-hour group")
     check(slots.allSatisfy { $0.minX.isFinite && $0.width.isFinite && $0.width >= 0
         && $0.minX >= 0 && $0.maxX <= chart.bounds.width }, "\(days)-day slot geometry stays finite and inside panel")
 }
 let currentHourChart = CopyActivityChartView(days: 10, now: now, buckets: [(hour: activityHour, copies: Int.max)])
 currentHourChart.frame = NSRect(x: 0, y: 0, width: SettingsPanelView.width - 16, height: 43)
 let currentBars = currentHourChart.renderedBarRects
-check(currentBars.count == 1 && currentBars[0].midX > currentHourChart.bounds.width - 3
-      && currentBars[0].maxX <= currentHourChart.bounds.width, "ten-day production geometry puts current activity at the visible right edge")
+check(currentBars.count == 1 && currentBars[0].maxX <= currentHourChart.bounds.width, "ten-day production geometry includes current activity in newest 20-hour group")
 let currentBitmap = currentHourChart.bitmapImageRepForCachingDisplay(in: currentHourChart.bounds)!
 currentHourChart.cacheDisplay(in: currentHourChart.bounds, to: currentBitmap)
 let currentRect = currentBars[0]
@@ -115,7 +266,7 @@ check(currentBars.allSatisfy { $0.minX.isFinite && $0.minY.isFinite && $0.width.
 let adversarialChart = CopyActivityChartView(days: Int.max, now: now,
     buckets: [(hour: activityHour - 1, copies: Int.min), (hour: activityHour, copies: Int.max)])
 adversarialChart.frame = currentHourChart.frame
-check(adversarialChart.intervalRects.count == 240 && adversarialChart.renderedBarRects.count == 1
+check(adversarialChart.intervalRects.count == 12 && adversarialChart.renderedBarRects.count == 1
     && adversarialChart.renderedBarRects.allSatisfy { $0.minX.isFinite && $0.minY.isFinite
         && $0.width.isFinite && $0.height.isFinite && adversarialChart.bounds.contains($0) },
       "extreme range and negative count do not overflow or draw invalid geometry")
@@ -130,14 +281,10 @@ let emptyBitmap = emptyHourChart.bitmapImageRepForCachingDisplay(in: emptyHourCh
 emptyHourChart.cacheDisplay(in: emptyHourChart.bounds, to: emptyBitmap)
 let emptyPixel = emptyBitmap.colorAt(x: Int(currentRect.midX), y: Int(currentRect.midY))?.usingColorSpace(.deviceRGB)
 check(emptyPixel.map { $0.blueComponent > $0.redComponent } != true, "offscreen empty hour remains unpainted")
-check(choices("copyActivityDays")?.titles == ["3 days", "5 days", "10 days"] && choices("copyActivityDays")?.selectedIndex == 1,
-      "native range row offers three five and ten days with five selected")
-check((choices("copyActivityDays")?.frame.width ?? 0) > 0 && choices("copyActivityDays")!.frame.maxX <= view.bounds.width,
-      "native activity range dropdown fits the production panel")
-let chartBounds = view.activityChart!.bounds
-check(chartBounds.height == 43, "production activity chart is one-third shorter")
-let chartHourCount = view.activityChart!.days * 24
-check(chartBounds.width > CGFloat(chartHourCount - 1), "ten-day chart has nonnegative one-pixel hourly slots")
+check(!view.controls.contains { $0.partName == "copyActivityDays" }, "fixed activity chart has no range selector")
+check(view.activityChart?.days == 5 && view.activityChart?.frame.width == 54 && view.activityChart?.frame.height == 17, "production chart is compact fixed five-day header graph")
+check(view.activityChart?.accessibilityLabel() == "Copy activity over the last 5 days, in 20-hour groups", "fixed five-day graph describes 20-hour groups for accessibility")
+check(!view.scrollView.documentView!.subviews.contains { ($0 as? NSTextField)?.stringValue.hasPrefix("Clipboard:") == true }, "clipboard status line is absent")
 let emptyChart = CopyActivityChartView(days: 5, now: now, buckets: [])
 emptyChart.frame = NSRect(x: 0, y: 0, width: 440, height: 64)
 emptyChart.draw(emptyChart.bounds)
@@ -149,12 +296,12 @@ check(zeroChart.buckets.first?.copies == 0 && zeroChart.bounds.width.isFinite &&
       "zero activity draws through finite production chart geometry")
 var refreshed = content()
 refreshed.copyActivity = [(hour: activityHour - 1, copies: 0), (hour: activityHour, copies: 7)]
-refreshed.settings.copyActivityDays = 3
+refreshed.settings.copyActivityDays = 10
 view.show(refreshed)
-check(view.activityChart?.days == 3 && view.activityChart?.buckets.map(\.copies) == [0, 7],
-      "synthetic capture refresh replaces chart data, total and selected range")
-check(choices("copyActivityDays")?.selectedIndex == 0 && view.activityChart?.accessibilityLabel() == "Copy activity over the last 3 days, hourly",
-      "refreshed range selection and chart accessibility endpoints match")
+check(view.activityChart?.days == 5 && view.activityChart?.buckets.map(\.copies) == [0, 7],
+      "synthetic refresh replaces observed chart data while retaining fixed five-day range")
+check(view.activityChart?.accessibilityLabel() == "Copy activity over the last 5 days, in 20-hour groups",
+      "refreshed chart accessibility remains fixed five-day")
 let longLabel = choices("plainText")!
 check(longLabel.frame.width > 0 && longLabel.frame.maxX <= view.bounds.width && longLabel.popup.itemArray.count == 2,
       "long approved paste labels remain inside the production panel")
@@ -205,10 +352,7 @@ choices("plainText")?.select(1)
 check(settings.alwaysPastePlainText && choices("plainText")?.selectedIndex == 1, "always plain text")
 checkbox("pause")?.toggle()
 check(settings.capturePaused, "pause")
-choices("hotkey")?.select(2)
-check(settings.pickerHotkey == .controlCommandV, "hotkey choice")
-choices("hotkey")?.select(4)
-check(settings.pickerHotkey == HotkeyChoice.none, "no hotkey")
+check(settings.pickerHotkey == .shiftCommandV, "stored picker shortcut is preserved")
 choices("largest")?.select(3)
 check(settings.maximumClipMegabytes == 100, "largest clip choice")
 integerField("keep")?.onCommit?(Int.max)
@@ -264,17 +408,12 @@ calls.removeAll()
 view.resetInteraction()
 check(view.focusedPart == "", "nothing focused at first")
 view.keyDown(with: key(48, "\t"))
-check(view.focusedPart == "copyActivityDays", "tab focuses the first native range control")
-check(settings.copyActivityDays == 5 && view.focusedPart == "copyActivityDays", "range control starts at five days")
+check(view.focusedPart == "pause", "tab focuses first setting, not removed chart selector")
 view.keyDown(with: key(48, "\t", .shift))
 check(view.focusedPart == "quit", "shift-tab wraps to the last control")
-for _ in 0..<4 { view.keyDown(with: key(48, "\t")) }
-check(view.focusedPart == "hotkey", "tab reaches the hotkey row")
-check(settings.pickerHotkey == HotkeyChoice.none, "hotkey is none before the arrow keys")
-view.keyDown(with: key(124))
-check(settings.pickerHotkey == HotkeyChoice.none, "right arrow at the last choice stays")
-view.keyDown(with: key(123))
-check(settings.pickerHotkey == .shiftOptionCommandV, "left arrow changes the choice")
+for _ in 0..<3 { view.keyDown(with: key(48, "\t")) }
+check(view.focusedPart != "hotkey", "shortcut hint is not an editable focus target")
+check(settings.pickerHotkey == .shiftCommandV, "read-only panel hint preserves the configured picker shortcut")
 calls.removeAll()
 view.keyDown(with: key(53, "\u{1b}"))
 check(calls == ["close"], "escape closes the panel")
@@ -291,7 +430,15 @@ notices[0].press()
 check(calls == ["notice needsAccessibility"], "notice opens its fix")
 check(!PanelNotice.hotkeyUnavailable(.shiftCommandV).title.contains("\u{2014}"), "no em dash in notices")
 // MARK: menu bar icon
-check(StatusItemController.icon.isTemplate && StatusItemController.icon.size.width > 0, "menu bar icon is a template image")
+check(StatusItemController.icon.isTemplate && StatusItemController.icon.size == NSSize(width: 16, height: 17.33), "menu bar icon is a broad template clipboard")
+let renderedClipboard = ClipboardIcon.image(size: NSSize(width: 24, height: 26), accessibilityDescription: nil)
+check(ClipboardIcon.aspectRatio == 24.0 / 26.0 && renderedClipboard.size == NSSize(width: 24, height: 26), "panel and menu icons share clipboard proportions")
+check(abs(ClipboardIcon.strokeWidth(for: NSRect(x: 0, y: 0, width: 16, height: 17.33)) - 1.28) < 0.001
+    && abs(ClipboardIcon.strokeWidth(for: NSRect(x: 0, y: 0, width: 24, height: 26)) - 1.92) < 0.001,
+      "shared clipboard stroke is 1.28 points at menu size and 1.92 at panel size")
+let clipboardPixels = NSBitmapImageRep(data: renderedClipboard.tiffRepresentation!)!
+func ink(_ x: Int, _ y: Int) -> Bool { (clipboardPixels.colorAt(x: x, y: y)?.alphaComponent ?? 0) > 0.5 }
+check(ink(12, 2) && !ink(12, 12) && ink(3, 12), "offscreen clipboard has a top tab and open board interior")
 
 // MARK: snapshots for a visual check (only with PANEL_SNAPSHOT_DIRECTORY set)
 if let directory = ProcessInfo.processInfo.environment["PANEL_SNAPSHOT_DIRECTORY"] {
@@ -342,8 +489,7 @@ choices("contentLines")?.select(3)
 check(settings.pickerContentLines == 5 && settings.pickerWidth == 560 && settings.pickerDensity == 4, "consecutive content lines binding")
 choices("density")?.select(1)
 check(settings.pickerDensity == 7 && settings.pickerContentLines == 5, "density independent of lines")
-choices("copyActivityDays")?.select(2)
-check(settings.copyActivityDays == 10 && view.activityChart?.days == 10, "range selection updates the production chart")
+check(settings.copyActivityDays == 5 && view.activityChart?.days == 5, "saved range does not alter fixed production chart")
 choices("visibleItems")?.select(3)
 check(settings.maximumVisibleItems == 15 && settings.pickerDensity == 7, "visible cap binding")
 checkbox("typeIcons")?.toggle()
@@ -366,11 +512,21 @@ check(view.statusLine.contains("unavailable"), "unknown history does not claim z
 view.show(content())
 
 // MARK: disabled operations, accessibility, keyboard focus
-for name in ["import", "export"] {
+for name in ["import", "export", "settings"] {
     let control = button(name)!
-    check(!control.isEnabled && control.title == "\(name.capitalized): Not implemented"
-        && !control.title.unicodeScalars.contains(where: { $0.properties.generalCategory == .dashPunctuation }),
-        "\(name) visibly unavailable with a colon label and no dash characters")
+    check(!control.isEnabled && control.title == name.capitalized,
+        "\(name) action is disabled")
+    if name == "import" || name == "export" {
+        check(control.toolTip == "\(name.capitalized): Not implemented"
+              && control.accessibilityLabel() == "\(name.capitalized), Not implemented",
+              "\(name) exposes its unavailable state in tooltip and accessibility")
+        check(InterfaceStyle.width(of: "Not implemented", font: .systemFont(ofSize: 9)) <= control.frame.width,
+              "\(name) unavailable caption fits its footer group")
+        check(view.subviews.contains { subview in
+            subview.subviews.contains { ($0 as? NSTextField)?.stringValue == "Not implemented"
+                && $0.frame.width >= 78 && $0.frame.height >= 16 }
+        }, "\(name) has a visible unavailable caption")
+    }
     var invoked = false
     control.onPress = { invoked = true }
     control.press()
@@ -379,7 +535,7 @@ for name in ["import", "export"] {
     check(control.accessibilityRole() == .button && control.isAccessibilityEnabled() == false, "\(name) accessibility disabled button")
 }
 check(checkbox("pause")?.accessibilityRole() == .checkBox, "custom checkbox accessibility role")
-check(checkbox("pause")?.accessibilityLabel() == "Enable clipboard history", "checkbox accessible label")
+check(checkbox("pause")?.accessibilityLabel() == "Keep clipboard history", "checkbox accessible label")
 check(choices("pickerWidth")?.popup.accessibilityLabel() == "Width", "native popup accessible label")
 check(choices("pickerWidth")?.popup.itemTitles == ["Narrow (360 pt)", "Standard (460 pt)", "Wide (560 pt)"], "native popup choices")
 view.resetInteraction()
@@ -390,7 +546,7 @@ for _ in 0..<view.controls.filter({ $0.isEnabled }).count {
 }
 check(!visited.contains("import") && !visited.contains("export") && visited.contains("pickerWidth"), "tab skips disabled controls and reaches native dropdowns")
 view.moveFocus(by: 1)
-check(view.focusedPart == "copyActivityDays", "tab wraps")
+check(view.focusedPart == "pause", "tab wraps")
 button("clearHistory")?.press()
 view.moveFocus(by: 1)
 check(view.focusedPart == "confirmCancel", "confirmation focus stays within actions")
@@ -592,8 +748,8 @@ windowFits("initial")
 check(realPanel.styleMask.contains(.nonactivatingPanel), "production window remains nonactivating")
 let ordinaryHeight = realPanel.frame.height
 (windowView.control(named: "clearHistory") as? PanelButton)?.press()
-check(realPanel.frame.height == ordinaryHeight + 24 && windowView.preferredHeight == realPanel.frame.height,
-      "clear confirmation immediately grows the owning window")
+check(realPanel.frame.height == ordinaryHeight - 24 && windowView.preferredHeight == realPanel.frame.height,
+      "clear confirmation fits the reserved footer layout")
 let clearLockedField = windowView.control(named: "keep") as! PanelIntegerField
 check(!clearLockedField.isEnabled && !clearLockedField.field.isEnabled, "clear confirmation disables native numeric editor")
 clearLockedField.field.stringValue = "77"
@@ -610,7 +766,7 @@ reductionEditor.insertText("100", replacementRange: NSRange(location: NSNotFound
 reductionField.field.textDidChange(Notification(name: NSText.didChangeNotification, object: reductionEditor))
 reductionEditor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
 check(windowView.confirmation == .keepHistory(limit: 100, deleting: 42)
-    && realPanel.frame.height == ordinaryHeight + 24, "smaller-limit confirmation also resizes")
+    && realPanel.frame.height == ordinaryHeight - 24, "smaller-limit confirmation fits the reserved footer layout")
 let reductionLockedField = windowView.control(named: "keep") as! PanelIntegerField
 check(!reductionLockedField.isEnabled && !reductionLockedField.field.isEnabled, "reduction confirmation disables native numeric editor")
 reductionLockedField.field.stringValue = "200"
@@ -694,17 +850,12 @@ anchor = nil
 windowController.resizeToFit()
 windowFits("missing anchor")
 
-// Compact clipboard diagnostics retain the entire troubleshooting text for hover and accessibility.
-for diagnostic in ["not recorded: synthetic failure", "not recorded: marked concealed",
-                   "not recorded from Test: test.ignored is ignored",
-                   "not recorded: larger than the limit (21 MB read)"] {
-    synthetic.clipboardLine = diagnostic
-    windowController.show(synthetic)
-    let detail = windowView.scrollView.documentView!.subviews.compactMap { $0 as? NSTextField }
-        .first { $0.accessibilityIdentifier() == "clipboardStatus" }
-    check(detail?.stringValue == "Clipboard: " + diagnostic && detail?.toolTip == "Clipboard: " + diagnostic
-        && detail?.accessibilityLabel() == "Clipboard: " + diagnostic, "diagnostic visible, hoverable and accessible: \(diagnostic)")
-}
+// Clipboard diagnostics are intentionally not displayed in the panel header or settings body.
+synthetic.clipboardLine = "not recorded: synthetic failure"
+windowController.show(synthetic)
+check(!windowView.scrollView.documentView!.subviews.contains {
+    ($0 as? NSTextField)?.accessibilityIdentifier() == "clipboardStatus"
+}, "clipboard diagnostic line is omitted")
 temporaryDefaults.removePersistentDomain(forName: defaultsDomain)
 realPanel.close()
 

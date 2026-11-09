@@ -23,7 +23,7 @@ struct Settings: Equatable {
     var ignoredApps: [String] = []
     var capturePaused = false
     var pickerHotkey = HotkeyChoice.defaultChoice
-    var pickerWidth = 460
+    var pickerWidth = 560
     var pickerContentLines = 2
     var pickerDensity = 4
     var maximumVisibleItems = 8

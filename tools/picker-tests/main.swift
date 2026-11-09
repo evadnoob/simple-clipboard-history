@@ -42,6 +42,31 @@ check(model.firstRow == 25 && model.selectedIndex == 0, "scroll wheel stops at t
 model.scroll(by: -100)
 check(model.firstRow == 0, "scroll wheel stops at the top")
 
+// MARK: model: remove a specifically requested clip
+var mutableRows = all
+let removalModel = PickerModel(search: { query, limit in
+    Array((query.isEmpty ? mutableRows : mutableRows.filter { $0.preview.localizedCaseInsensitiveContains(query) }).prefix(limit))
+})
+removalModel.reset()
+removalModel.select(0)
+_ = removalModel.handle(.text("odd"))
+let clickedID = removalModel.rows[3].id
+removalModel.select(3)
+var removedIDs: [Int64] = []
+check(removalModel.removeClip(id: clickedID, delete: { id in removedIDs.append(id); mutableRows.removeAll { $0.id == id }; return true }),
+      "remove succeeds for requested filtered row")
+check(removedIDs == [clickedID] && removalModel.query == "odd" && removalModel.selectedClip?.id == removalModel.rows[3].id,
+      "removal preserves query and selects nearest remaining row")
+var staleDeleteCalled = false
+check(!removalModel.removeClip(id: clickedID, delete: { _ in staleDeleteCalled = true; return true }) && !staleDeleteCalled,
+      "repeated removal of stale ID is a no-op")
+mutableRows = [all[0]]
+removalModel.reset()
+check(!removalModel.removeClip(id: all[0].id, delete: { _ in false }) && removalModel.rows.count == 1,
+      "failed store deletion leaves model untouched")
+check(removalModel.removeClip(id: all[0].id, delete: { _ in mutableRows.removeAll(); return true }) && removalModel.rows.isEmpty && removalModel.selectedIndex == nil,
+      "last item removal leaves an empty picker model")
+
 // MARK: model: recall
 check(model.handle(.enter) == .recall(1, .original), "return recalls the selected clip with formatting")
 check(model.handle(.recallNumber(3)) == .recall(3, .original), "cmd-3 recalls the third visible row")
@@ -171,8 +196,91 @@ func render(_ view: NSView) -> NSBitmapImageRep {
     return bitmap
 }
 check(render(view).pixelsWide > 0, "picker draws")
+// Real thumbnail drawing is restricted to visible image rows and uses injected synthetic pixels.
+let imageRows = (1...30).map { number -> ClipSummary in
+    var summary = clip(Int64(number), "Synthetic image \(number)")
+    summary.kind = "image"
+    return summary
+}
+let imageModel = PickerModel(search: { _, _ in imageRows })
+let imageView = PickerView(model: imageModel)
+imageView.settings.showTimestamps = false
+imageModel.reset()
+imageView.setFrameSize(NSSize(width: 560, height: 180))
+imageView.layout()
+let redTile = NSImage(size: NSSize(width: 4, height: 4))
+redTile.lockFocus(); NSColor.red.setFill(); NSRect(x: 0, y: 0, width: 4, height: 4).fill(); redTile.unlockFocus()
+var thumbnailLoads: [Int64] = []
+var metadataLoads: [Int64] = []
+imageView.loadImageMetadata = { id in
+    metadataLoads.append(id)
+    return ClipStore.ImageMetadata(format: "PNG", width: 1200, height: 800, byteCount: 3100000)
+}
+imageView.settings.pickerContentLines = 1
+check(imageView.contentLines(for: imageRows[0]) == ["Image (PNG)"], "one content line shows image primary only: \(imageView.contentLines(for: imageRows[0]))")
+imageView.settings.pickerContentLines = 2
+check(imageView.contentLines(for: imageRows[0]) == ["Image (PNG)", "1200×800 · 3.0 MB"], "two content lines show image dimensions and stored size")
+let metadataCount = metadataLoads.count
+_ = imageView.contentLines(for: imageRows[0])
+check(metadataLoads.count == metadataCount, "image metadata cache avoids repeat property loading")
+let metadataBeforeReset = metadataLoads.count
+imageView.resetThumbnailCache()
+_ = imageView.contentLines(for: imageRows[0])
+check(metadataLoads.count == metadataBeforeReset + 1, "cache reset reloads metadata for a reused clip id")
+var corruptMetadataLoads = 0
+imageView.loadImageMetadata = { _ in corruptMetadataLoads += 1; return nil }
+imageView.resetThumbnailCache()
+_ = imageView.contentLines(for: imageRows[0])
+_ = imageView.contentLines(for: imageRows[0])
+check(corruptMetadataLoads == 1, "unavailable image metadata is cached until reset")
+imageView.resetThumbnailCache()
+_ = imageView.contentLines(for: imageRows[0])
+check(corruptMetadataLoads == 2, "cache reset invalidates unavailable metadata for reused id")
+imageView.loadImageMetadata = { id in
+    metadataLoads.append(id)
+    return ClipStore.ImageMetadata(format: "PNG", width: 1200, height: 800, byteCount: 3100000)
+}
+metadataLoads.removeAll()
+imageView.resetThumbnailCache()
+imageView.loadThumbnail = { id, pixels in
+    check(pixels == 36, "thumbnail request uses small target size")
+    thumbnailLoads.append(id)
+    return redTile
+}
+let imageRowsVisible = imageView.visibleRows.map(\.index)
+let imageBitmap = render(imageView)
+check(metadataLoads == imageRowsVisible.map { imageRows[$0].id }, "only visible image rows load metadata")
+check(thumbnailLoads == imageRowsVisible.map { imageRows[$0].id }, "only visible image rows load thumbnails")
+let redSample = imageBitmap.colorAt(x: 20, y: Int(imageView.visibleRows[0].rect.midY))!.usingColorSpace(.sRGB)!
+check(redSample.redComponent > 0.8 && redSample.greenComponent < 0.2, "row renders synthetic thumbnail pixels, not generic symbol")
+let loadCount = thumbnailLoads.count
+_ = imageView.thumbnail(for: imageRows[0].id, pixelSize: 36)
+check(thumbnailLoads.count == loadCount, "thumbnail cache reuses a visible row image")
+for id in 1000..<(1000 + PickerView.thumbnailCacheLimit + 2) { _ = imageView.thumbnail(for: Int64(id), pixelSize: 36) }
+check(imageView.cachedThumbnailCount == PickerView.thumbnailCacheLimit,
+      "thumbnail cache evicts least-recently-used entries at its strict bound")
+var unavailableLoads = 0
+imageView.resetThumbnailCache()
+imageView.loadThumbnail = { _, _ in unavailableLoads += 1; return nil }
+check(imageView.thumbnail(for: 999, pixelSize: 36) == nil && imageView.thumbnail(for: 999, pixelSize: 36) == nil
+      && unavailableLoads == 1, "unavailable thumbnails are cached and not repeatedly decoded")
+imageView.resetThumbnailCache()
+_ = imageView.thumbnail(for: 999, pixelSize: 36)
+check(unavailableLoads == 2, "cache reset invalidates unavailable thumbnail results")
 let secondRow = NSPoint(x: 100, y: view.chrome.listRect.minY + view.rowHeight(at: 0) * 1.5)
 check(view.rowIndex(at: secondRow) == 1, "click point maps to a row")
+let contextRect = view.visibleRows[1].rect
+let contextPoint = NSPoint(x: contextRect.midX, y: contextRect.midY)
+let contextMenu = view.contextMenu(at: contextPoint)
+check(contextMenu?.items.first?.title == "Remove from history"
+      && (contextMenu?.items.first?.representedObject as? NSNumber)?.int64Value == viewModel.rows[1].id,
+      "native remove menu captures the actual visible clip ID")
+check(view.contextMenu(at: NSPoint(x: 100, y: 2)) == nil, "empty/footer space has no remove menu")
+check(PickerView.shouldBeginWindowDrag(from: .zero, to: NSPoint(x: 2, y: 2)) == false
+      && PickerView.shouldBeginWindowDrag(from: .zero, to: NSPoint(x: 4, y: 0)), "window drag requires the movement threshold")
+check(PickerView.canBeginWindowDrag(at: contextPoint, in: view.bounds)
+      && !PickerView.canBeginWindowDrag(at: NSPoint(x: 2, y: 2), in: view.bounds),
+      "picker rows can drag the window while corner resize areas retain priority")
 check(view.rowIndex(at: NSPoint(x: 100, y: 2)) == nil, "title row is not a clip row")
 var actions: [PickerAction] = []
 view.onAction = { actions.append($0) }
@@ -266,11 +374,39 @@ let sizeMonitor = ClipboardMonitor(pasteboard: NSPasteboard(name: NSPasteboard.N
                                    store: sizeStore, settings: { Settings() })
 let sizeController = PickerController(store: sizeStore, settingsStore: SettingsStore(defaults: sizeDefaults), monitor: sizeMonitor,
                                       defaults: sizeDefaults)
-check(sizeController.savedSize == NSSize(width: 460, height: 10_000), "default width and uncapped saved height")
+check(sizeController.savedSize == NSSize(width: 560, height: 10_000), "default width and uncapped saved height")
 sizeController.saveSize(NSSize(width: 800, height: 600))
 check(sizeController.savedSize == NSSize(width: 800, height: 600), "picker size is remembered")
 sizeController.saveSize(NSSize(width: 10, height: 10))
 check(sizeController.savedSize == NSSize(width: 800, height: 600), "invalid size does not overwrite saved cap")
+func solidImage(_ color: NSColor, size: NSSize) -> NSImage {
+    let result = NSImage(size: size)
+    result.lockFocus(); color.setFill(); NSRect(origin: .zero, size: size).fill(); result.unlockFocus()
+    return result
+}
+func capturedImage(_ image: NSImage) -> CapturedClip {
+    CapturedClip(items: [[Representation(type: NSPasteboard.PasteboardType.tiff.rawValue, data: image.tiffRepresentation!)]])
+}
+let oldImageID = try! sizeStore.record(capturedImage(solidImage(.red, size: NSSize(width: 20, height: 10))))
+sizeController.prepareToOpen()
+let oldThumbnail = sizeController.view.thumbnail(for: oldImageID, pixelSize: 36)!
+check(sizeController.view.cachedThumbnailCount == 1, "picker caches the image row thumbnail")
+try! sizeStore.deleteAll()
+let reusedImageID = try! sizeStore.record(capturedImage(solidImage(.green, size: NSSize(width: 10, height: 20))))
+check(reusedImageID == oldImageID, "clear history allows SQLite clip id reuse")
+sizeController.prepareToOpen()
+check(sizeController.view.cachedThumbnailCount == 0, "picker reopening clears thumbnails across history replacement")
+let replacementThumbnail = sizeController.view.thumbnail(for: reusedImageID, pixelSize: 36)!
+let oldRep = NSBitmapImageRep(data: oldThumbnail.tiffRepresentation!)!
+let newRep = NSBitmapImageRep(data: replacementThumbnail.tiffRepresentation!)!
+let oldColor = oldRep.colorAt(x: oldRep.pixelsWide / 2, y: oldRep.pixelsHigh / 2)!.usingColorSpace(.sRGB)!
+let newColor = newRep.colorAt(x: newRep.pixelsWide / 2, y: newRep.pixelsHigh / 2)!.usingColorSpace(.sRGB)!
+check(oldColor.redComponent > oldColor.greenComponent && newColor.greenComponent > newColor.redComponent,
+      "reopened picker reads the replacement clip image, not stale cached pixels")
+let landscape = PickerView.aspectFitRect(for: NSSize(width: 40, height: 20), in: NSRect(x: 0, y: 0, width: 32, height: 32))
+let portrait = PickerView.aspectFitRect(for: NSSize(width: 20, height: 40), in: NSRect(x: 0, y: 0, width: 32, height: 32))
+check(landscape.width == 32 && landscape.height == 16 && portrait.width == 16 && portrait.height == 32,
+      "production thumbnail layout aspect-fits landscape and portrait images")
 sizeDefaults.removePersistentDomain(forName: sizeSuite)
 
 // MARK: integrated typography and selected-row contrast
@@ -364,9 +500,16 @@ check(geometryView.contentLines(for: multiline) == ["first", "", "third"], "cont
 check(geometryView.contentLines(for: imageSummary) == [imageSummary.preview], "nontext is one metadata row")
 let threeLineHeight = geometryView.rowHeight(at: 0)
 let singleLineHeight = geometryView.rowHeight(at: 1)
-check(threeLineHeight - singleLineHeight == InterfaceStyle.lineHeight * 2, "variable height follows actual lines")
+check(threeLineHeight >= 3 * InterfaceStyle.lineHeight && singleLineHeight == 40,
+      "variable text rows follow line count and image rows reserve thumbnail height")
 geometryView.settings.pickerDensity = 10
 check(geometryView.rowHeight(at: 0) == threeLineHeight + 12, "density changes padding independently of lines")
+for (density, expectedSize) in [(4, CGFloat(22)), (7, CGFloat(26)), (10, CGFloat(30))] {
+    let height = InterfaceStyle.lineHeight + CGFloat(density * 2)
+    let symbolRect = PickerView.typeSymbolRect(in: NSRect(x: 0, y: 0, width: 200, height: height), x: 8, density: density)
+    check(symbolRect.width == min(expectedSize, height - 2) && symbolRect.minY >= 1 && symbolRect.maxY <= height - 1,
+          "type icon size and vertical bounds follow density \(density)")
+}
 geometryView.settings.pickerDensity = 4
 geometryView.setFrameSize(NSSize(width: 460, height: threeLineHeight + singleLineHeight + geometryView.chrome.barHeight + InterfaceStyle.gap))
 check(geometryView.visibleRows.count == 2, "mixed-height viewport fits two complete rows")

@@ -119,6 +119,22 @@ final class PickerModel {
         scrollToSelection()
     }
 
+    /// Deletes only the requested stored clip. A failed/stale deletion leaves the model unchanged.
+    @discardableResult
+    func removeClip(id: Int64, delete: (Int64) throws -> Bool) -> Bool {
+        guard rows.contains(where: { $0.id == id }), (try? delete(id)) == true else { return false }
+        let oldIndex = rows.firstIndex { $0.id == id } ?? 0
+        rows.removeAll { $0.id == id }
+        if rows.isEmpty {
+            selectedIndex = nil
+            firstRow = 0
+        } else {
+            selectedIndex = min(oldIndex, rows.count - 1)
+            scrollToSelection()
+        }
+        return true
+    }
+
     // MARK: selection
 
     /// Selects a clip row, or in the filter step a filter row (headings are skipped).

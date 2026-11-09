@@ -19,6 +19,47 @@ func freshStore() -> ClipStore {
     return try! ClipStore(directory: directory)
 }
 
+// MARK: bounded image thumbnails
+let thumbnailStore = freshStore()
+let fixtureImage = NSImage(size: NSSize(width: 512, height: 512))
+fixtureImage.lockFocus()
+NSColor.red.setFill(); NSRect(x: 0, y: 0, width: 256, height: 512).fill()
+NSColor.green.setFill(); NSRect(x: 256, y: 0, width: 256, height: 512).fill()
+fixtureImage.unlockFocus()
+let fixtureTIFF = fixtureImage.tiffRepresentation!
+let imageClip = CapturedClip(items: [[Representation(type: NSPasteboard.PasteboardType.tiff.rawValue, data: fixtureTIFF)]])
+let thumbnailID = try! thumbnailStore.record(imageClip, at: Date(timeIntervalSince1970: 1_800_000_000))
+check(((try? FileManager.default.contentsOfDirectory(atPath: thumbnailStore.directory.appendingPathComponent("blobs").path).isEmpty) == false),
+      "large synthetic image fixture is blob-backed")
+let thumbnail = try! thumbnailStore.thumbnail(for: thumbnailID, maximumPixelSize: 5)!
+check(max(thumbnail.size.width, thumbnail.size.height) <= 5, "image thumbnail is downsampled to its requested bound")
+let thumbnailRep = NSBitmapImageRep(data: thumbnail.tiffRepresentation!)!
+let left = thumbnailRep.colorAt(x: 0, y: thumbnailRep.pixelsHigh / 2)!.usingColorSpace(.sRGB)!
+let right = thumbnailRep.colorAt(x: thumbnailRep.pixelsWide - 1, y: thumbnailRep.pixelsHigh / 2)!.usingColorSpace(.sRGB)!
+check(left.redComponent > right.redComponent && right.greenComponent > left.greenComponent,
+      "thumbnail preserves distinct red and green fixture pixels")
+
+// Stored image metadata uses actual representation bytes and ImageIO pixel properties.
+func encodedImage(width: Int, height: Int, type: NSBitmapImageRep.FileType) -> Data {
+    let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height,
+                               bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                               colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+    return rep.representation(using: type, properties: [:])!
+}
+for (w, h, fileType, pasteType, expected) in [
+    (120, 80, NSBitmapImageRep.FileType.png, NSPasteboard.PasteboardType.png.rawValue, "PNG"),
+    (37, 91, NSBitmapImageRep.FileType.png, NSPasteboard.PasteboardType.png.rawValue, "PNG"),
+    (64, 48, NSBitmapImageRep.FileType.jpeg, "public.jpeg", "JPEG"),
+] {
+    let bytes = encodedImage(width: w, height: h, type: fileType)
+    let id = try! thumbnailStore.record(CapturedClip(items: [[Representation(type: pasteType, data: bytes)]]), at: Date(timeIntervalSince1970: 1_800_000_000))
+    let metadata = thumbnailStore.imageMetadata(for: id)
+    check(metadata?.format == expected && metadata?.width == w && metadata?.height == h && metadata?.byteCount == bytes.count,
+          "image metadata reports actual format, dimensions and representation byte count")
+}
+let corruptID = try! thumbnailStore.record(CapturedClip(items: [[Representation(type: NSPasteboard.PasteboardType.png.rawValue, data: Data([1, 2, 3]))]]), at: Date(timeIntervalSince1970: 1_800_000_000))
+check(thumbnailStore.imageMetadata(for: corruptID) == nil, "corrupt image metadata has truthful unavailable fallback")
+
 // MARK: captured clip
 let multiline = textClip("  first line\n\n  second\tline  ")
 check(multiline.preview == "first line second line", "preview collapses whitespace")
