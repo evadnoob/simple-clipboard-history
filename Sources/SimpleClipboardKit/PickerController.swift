@@ -131,12 +131,20 @@ final class PickerController: NSObject, NSWindowDelegate {
         self.model = model ?? PickerModel(search: { query, limit in (try? store.search(query, limit: limit)) ?? [] })
         view = PickerView(model: self.model)
         super.init()
+        view.onOpenControlPanel = { [weak self] in self?.openControlPanel() }
         view.onContentChanged = { [weak self] in self?.resizeToContent() }
         view.loadItems = { id in (try? store.items(for: id)) ?? [] }
         view.loadThumbnail = { id, pixelSize in try? store.thumbnail(for: id, maximumPixelSize: pixelSize) }
         view.loadImageMetadata = { id in store.imageMetadata(for: id) }
         view.onAction = { [weak self] action in self?.handle(action) }
         view.onRemoveClip = { [weak self] id in self?.removeClip(id) }
+    }
+
+    var onOpenControlPanel: (() -> Void)?
+
+    func openControlPanel() {
+        close()
+        onOpenControlPanel?()
     }
 
     var isOpen: Bool { panel.isVisible }
@@ -163,6 +171,16 @@ final class PickerController: NSObject, NSWindowDelegate {
         resizeToContent(centered: true)
     }
 
+    /// Refresh appearance in place without resetting the query, selection or manual height cap.
+    func applySettings() {
+        view.settings = settingsStore.settings
+        view.recallVerb = settingsStore.settings.recallMode == .paste ? "paste" : "copy"
+        model.alwaysPastePlainText = settingsStore.settings.alwaysPastePlainText
+        view.updateRowCount()
+        view.needsDisplay = true
+        if view.window?.isVisible == true { resizeToContent() }
+    }
+
     func close() {
         guard panel.isVisible else { return }
         panel.orderOut(nil)
@@ -171,6 +189,12 @@ final class PickerController: NSObject, NSWindowDelegate {
     private func handle(_ action: PickerAction) {
         switch action {
         case .none: break
+        case .cycleDensity:
+            settingsStore.update { settings in
+                let choices = Settings.pickerDensityChoices
+                let index = choices.firstIndex(of: settings.pickerDensity) ?? 0
+                settings.pickerDensity = choices[(index + 1) % choices.count]
+            }
         case .close: close()
         case .recall(let id, let format): recall(id, format: format)
         }

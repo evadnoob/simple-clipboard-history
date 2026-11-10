@@ -15,6 +15,7 @@ struct ClipSummary: Equatable {
     var copyCount: Int
     var sourceAppName: String?
     var contentPreview: String = ""
+    var hasFormattedText = false
 }
 
 struct StoreStatistics: Equatable {
@@ -359,7 +360,9 @@ final class ClipStore {
     // MARK: reading
 
     private static let summaryColumns = """
-        id, kind, preview, content_preview, byte_size, first_copied_at, last_copied_at, copy_count, source_app_name
+        id, kind, preview, content_preview, byte_size, first_copied_at, last_copied_at, copy_count, source_app_name,
+        EXISTS (SELECT 1 FROM representations WHERE clip_id = clips.id
+            AND type IN ('public.rtf', 'public.rtfd', 'com.apple.flat-rtfd', 'public.html'))
         """
 
     private static func capturedContentPreview(_ clip: CapturedClip) -> String {
@@ -401,7 +404,7 @@ final class ClipStore {
         ClipSummary(id: row.integer(0), kind: row.text(1) ?? "", preview: row.text(2) ?? "",
                     byteSize: Int(row.integer(4)), firstCopiedAt: Date(timeIntervalSince1970: row.real(5)),
                     lastCopiedAt: Date(timeIntervalSince1970: row.real(6)), copyCount: Int(row.integer(7)),
-                    sourceAppName: row.text(8), contentPreview: row.text(3) ?? "")
+                    sourceAppName: row.text(8), contentPreview: row.text(3) ?? "", hasFormattedText: row.integer(9) != 0)
     }
 
     func recent(limit: Int) throws -> [ClipSummary] {

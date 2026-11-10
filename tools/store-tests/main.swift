@@ -19,6 +19,21 @@ func freshStore() -> ClipStore {
     return try! ClipStore(directory: directory)
 }
 
+// MARK: formatted summaries use representation type metadata, including existing stores
+let formattedStore = freshStore()
+let formattedID = try! formattedStore.record(CapturedClip(items: [[
+    Representation(type: textType, data: Data("Synthetic heading".utf8)),
+    Representation(type: "public.rtf", data: Data("{synthetic representation}".utf8))
+]]))
+check(try! formattedStore.recent(limit: 1).first!.hasFormattedText, "recent summary carries formatting metadata")
+check(try! formattedStore.search("heading", limit: 1).first!.hasFormattedText, "search summary carries formatting metadata")
+let reopenedFormattedStore = try! ClipStore(directory: formattedStore.directory)
+check(try! reopenedFormattedStore.recent(limit: 1).first!.hasFormattedText, "formatting metadata works without schema migration")
+check(try! reopenedFormattedStore.recent(limit: 1).first!.id == formattedID, "formatting metadata preserves stable ID")
+let unformattedStore = freshStore()
+try! unformattedStore.record(textClip("Plain synthetic notes"))
+check(try! !unformattedStore.recent(limit: 1).first!.hasFormattedText, "plain summary does not claim formatting")
+
 // MARK: bounded image thumbnails
 let thumbnailStore = freshStore()
 let fixtureImage = NSImage(size: NSSize(width: 512, height: 512))

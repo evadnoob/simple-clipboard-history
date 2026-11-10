@@ -33,6 +33,25 @@ check(Settings.defaults.showTypeIcons && !Settings.defaults.showTimestamps && Se
 check(Settings.defaults.maximumHistoryMegabytes == 500, "history size defaults")
 check(Settings.defaults.copyActivityDays == 5, "copy activity range defaults to five days")
 
+// MARK: icon families persist independently and reject invalid stored choices
+check(store.settings.iconStyle == .current, "existing appearance remains the default")
+for style in ClipIconStyle.allCases {
+    let isolated = freshDefaults()
+    let familyStore = SettingsStore(defaults: isolated)
+    var notifications = 0
+    familyStore.onChange = { _ in notifications += 1 }
+    familyStore.update { $0.iconStyle = style }
+    check(SettingsStore(defaults: isolated).settings.iconStyle == style, "family persists: \(style.rawValue)")
+    check(familyStore.settings.showTypeIcons && familyStore.settings.pickerWidth == Settings.defaults.pickerWidth,
+          "family does not alter independent appearance settings")
+    check(notifications == (style == .current ? 0 : 1), "family flows through settings notifications")
+}
+for invalid: Any in ["future-family", "", 3, true, ["openOutlines"]] {
+    let isolated = freshDefaults()
+    isolated.set(invalid, forKey: "iconStyle")
+    check(SettingsStore(defaults: isolated).settings.iconStyle == .current, "invalid family safely defaults")
+}
+
 // MARK: updates persist and notify
 var notified: [Settings] = []
 store.onChange = { notified.append($0) }
