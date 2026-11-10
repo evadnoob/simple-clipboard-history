@@ -13,6 +13,8 @@ enum PickerKey: Equatable {
     case deleteBackward
     case deleteWordBackward
     case clearQuery
+    /// Control-Option-D: cycle the saved picker padding without editing either query.
+    case cycleDensity
     /// Cmd-1 to Cmd-9: recall the visible row with this number.
     case recallNumber(Int)
     case text(String)
@@ -22,6 +24,7 @@ enum PickerAction: Equatable {
     case none
     case close
     case recall(Int64, RecallFormat)
+    case cycleDensity
 }
 
 /// A row of the filter step: a group heading or a filter.
@@ -225,6 +228,7 @@ final class PickerModel {
     private func handleClipKey(_ key: PickerKey) -> PickerAction {
         let current = selectedIndex ?? 0
         switch key {
+        case .cycleDensity: return .cycleDensity
         case .up: select(current - 1)
         case .down: select(current + 1)
         case .pageUp: select(current - visibleRowCount)
@@ -260,6 +264,7 @@ final class PickerModel {
 
     private func handleFilterKey(_ key: PickerKey, clipID: Int64) -> PickerAction {
         switch key {
+        case .cycleDensity: return .cycleDensity
         case .up: moveFilterSelection(by: -1)
         case .down: moveFilterSelection(by: 1)
         case .pageUp: moveFilterSelection(by: -visibleRowCount)

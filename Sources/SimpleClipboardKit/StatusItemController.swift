@@ -80,17 +80,17 @@ final class StatusItemController: NSObject, NSWindowDelegate {
         openPanel()
     }
 
-    func openPanel() {
+    func openPanel(page: SettingsPanelView.Page = .main) {
         frontmostApp = NSWorkspace.shared.frontmostApplication
         statistics = try? store.statistics()
-        panelView.resetInteraction()
-        showContent()
+        panelController.prepareToOpen(content(), page: page)
         panel.makeKeyAndOrderFront(nil)
         panel.makeFirstResponder(panelView)
     }
 
     func closePanel() {
         panel.orderOut(nil)
+        panelView.resetInteraction()
     }
 
     func windowDidResignKey(_ notification: Notification) {
@@ -220,6 +220,11 @@ final class SettingsPanelWindowController {
         self.placement = placement
         panel = FloatingPanel(contentView: view, size: view.frame.size)
         view.onPreferredSizeChange = { [weak self] in self?.resizeToFit() }
+    }
+
+    func prepareToOpen(_ content: SettingsPanelContent, page: SettingsPanelView.Page = .main) {
+        view.resetInteraction(page: page)
+        show(content)
     }
 
     func show(_ content: SettingsPanelContent) {

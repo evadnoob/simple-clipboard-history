@@ -517,7 +517,7 @@ check(geometryView.rowIndex(at: NSPoint(x: 100, y: geometryView.chrome.listRect.
 geometryView.perform(.pageDown)
 check(geometryModel.selectedClip?.id == 103 && geometryView.visibleRows.contains { $0.index == 2 }, "page navigation keeps variable-height selection visible")
 geometryView.perform(.home)
-let accessibleRows = geometryView.accessibilityChildren() as! [NSAccessibilityElement]
+let accessibleRows = geometryView.accessibilityChildren()!.compactMap { $0 as? NSAccessibilityElement }
 check(accessibleRows.first?.accessibilityLabel()?.contains("first\n\nthird") == true, "accessible row describes displayed content")
 check(accessibleRows.first?.isAccessibilitySelected() == true, "accessible row exposes selection")
 var accessibleActions: [PickerAction] = []
@@ -748,8 +748,184 @@ check(structureView.visibleRows.allSatisfy {
 }, "row dividers are thin and stay inside variable-height rows")
 check(structureView.contentLines(for: symbolImage).count == 1 && structureView.contentLines(for: symbolFiles).count == 1,
       "nontext summaries remain one compact metadata row")
-_ = render(structureView)
-check(rowLoads == 0, "list drawing and kind symbols never load representations")
+for style in ClipIconStyle.allCases {
+    structureView.settings.iconStyle = style
+    _ = render(structureView)
+    check(rowLoads == 0, "list drawing and kind artwork never load representations: \(style.rawValue)")
+}
+
+// MARK: picker-only Control-Option-D density intent, event routing and persisted geometry
+func densityEvent(_ flags: NSEvent.ModifierFlags = [.control, .option], characters: String = "∂",
+                  plain: String? = nil, repeatKey: Bool = false, keyCode: UInt16 = 2) -> NSEvent {
+    NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0,
+                     context: nil, characters: characters, charactersIgnoringModifiers: plain ?? characters,
+                     isARepeat: repeatKey, keyCode: keyCode)!
+}
+check(PickerView.pickerKey(for: densityEvent()) == .cycleDensity, "Ctrl-Option-D translates key code with ∂ retained in both character fields")
+check(PickerView.pickerKey(for: densityEvent([.control, .option, .capsLock], characters: "D")) == .cycleDensity,
+      "Ctrl-Option-D translates uppercase D in both character fields with Caps Lock")
+for flags: NSEvent.ModifierFlags in [[], .option, .control, .command, [.command, .option],
+                                    [.control, .option, .command], [.control, .option, .shift]] {
+    check(PickerView.pickerKey(for: densityEvent(flags)) != .cycleDensity, "density requires exact Ctrl-Option without command or shift: \(flags)")
+}
+check(PickerView.pickerKey(for: densityEvent(characters: "d", keyCode: 3)) == nil, "layout-translated F key cannot cycle even when both character fields claim d")
+check(PickerView.pickerKey(for: densityEvent([], characters: "d")) == .text("d"), "plain d remains query input")
+check(PickerView.pickerKey(for: densityEvent(.capsLock, characters: "D")) == .text("D"), "plain uppercase D remains query input")
+check(PickerView.pickerKey(for: densityEvent(.option)) == .text("∂"), "Option-D remains normal text input")
+let densityIntentModel = PickerModel(search: search)
+densityIntentModel.reset()
+_ = densityIntentModel.handle(.text("odd"))
+densityIntentModel.select(9)
+let intentClip = densityIntentModel.selectedClip?.id
+let intentFirst = densityIntentModel.firstRow
+check(densityIntentModel.handle(.cycleDensity) == .cycleDensity && densityIntentModel.query == "odd"
+      && densityIntentModel.selectedClip?.id == intentClip && densityIntentModel.firstRow == intentFirst,
+      "density model intent leaves query selection and scroll unchanged")
+_ = densityIntentModel.handle(.enterFilter)
+_ = densityIntentModel.handle(.text("base64"))
+let intentFilter = densityIntentModel.selectedFilter
+check(densityIntentModel.handle(.cycleDensity) == .cycleDensity && densityIntentModel.filterQuery == "base64"
+      && densityIntentModel.selectedFilter == intentFilter && densityIntentModel.query == "odd",
+      "density model intent also preserves filter query and selection")
+let detachedDensityView = PickerView(model: densityIntentModel)
+check(!detachedDensityView.performKeyEquivalent(with: densityEvent()), "closed detached picker cannot capture a key equivalent")
+
+do {
+    let suite = "simple-clipboard-density-shortcut-\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let settings = SettingsStore(defaults: defaults)
+    settings.update { $0.pickerContentLines = 3; $0.maximumVisibleItems = 15; $0.iconStyle = .editorialContentMarks }
+    let rows = (1...40).map { clip(Int64($0), "Density fixture \($0)\nConsecutive second line\nConsecutive third line") }
+    let model = PickerModel(search: { query, limit in
+        Array(rows.filter { query.isEmpty || $0.preview.localizedCaseInsensitiveContains(query) }.prefix(limit))
+    })
+    let controller = PickerController(store: sizeStore, settingsStore: settings, monitor: sizeMonitor,
+        defaults: defaults, model: model, screenFrame: { NSRect(x: 0, y: 0, width: 1440, height: 900) })
+    var changes: [Int] = []
+    // Same store callback seam as SimpleClipboardApp, without opening or activating the panel.
+    settings.onChange = { value in changes.append(value.pickerDensity); controller.applySettings() }
+    controller.saveSize(NSSize(width: 808, height: 547))
+    controller.prepareToOpen()
+    controller.view.perform(.text("Density"))
+    model.select(29)
+    let selected = model.selectedClip?.id
+    let hotkey = settings.settings.pickerHotkey
+    for expected in [7, 10, 4] {
+        controller.view.keyDown(with: densityEvent())
+        check(settings.settings.pickerDensity == expected && defaults.integer(forKey: "pickerDensity") == expected
+              && SettingsStore(defaults: defaults).settings.pickerDensity == expected,
+              "density shortcut immediately persists and reloads \(expected)")
+        let mainPanel = SettingsPanelView()
+        mainPanel.show(SettingsPanelContent(settings: settings.settings, statistics: nil, clipboardLine: "Synthetic fixture",
+            frontmostApp: nil, notices: [], appNames: [:], hotkeyLabel: nil))
+        check((mainPanel.control(named: "density") as? PanelDropdown)?.popup.indexOfSelectedItem
+              == Settings.pickerDensityChoices.firstIndex(of: expected), "Main dropdown reads density from existing store on next open \(expected)")
+        check(controller.view.settings.pickerDensity == expected && controller.view.rowHeight(at: 0)
+              == 3 * InterfaceStyle.lineHeight + CGFloat(expected * 2), "production row padding immediately updates \(expected)")
+        check(model.query == "Density" && model.selectedClip?.id == selected
+              && controller.view.visibleRows.contains(where: { $0.index == model.selectedIndex }),
+              "density resize keeps selected queried clip visible \(expected)")
+        check(controller.savedSize == NSSize(width: 808, height: 547) && controller.view.window!.frame.height == 547,
+              "density retains width and 547 height cap \(expected)")
+        if let directory = ProcessInfo.processInfo.environment["PICKER_SNAPSHOT_DIRECTORY"] {
+            try! FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+            try! render(controller.view).representation(using: .png, properties: [:])!.write(
+                to: URL(fileURLWithPath: directory).appendingPathComponent("density-\(expected)-cap547.png"))
+        }
+    }
+    check(changes == [7, 10, 4] && settings.settings.pickerHotkey == hotkey, "cycles wrap through store callbacks without changing global binding")
+    check(!controller.isOpen, "synthetic event tests never open the picker or install a global binding")
+    controller.view.keyDown(with: densityEvent(repeatKey: true))
+    check(changes == [7, 10, 4], "held density shortcut repeat is consumed without cycling")
+    controller.view.window!.makeFirstResponder(controller.view)
+    check(controller.view.performKeyEquivalent(with: densityEvent(repeatKey: true)) && changes == [7, 10, 4],
+          "key-equivalent route consumes held repeat without cycling")
+    check(controller.view.performKeyEquivalent(with: densityEvent()) && changes == [7, 10, 4, 7],
+          "first-responder key-equivalent route dispatches density intent")
+    controller.view.keyDown(with: densityEvent())
+    controller.view.keyDown(with: densityEvent())
+    check(settings.settings.pickerDensity == 4, "key-equivalent cycle and keyDown share the saved density")
+    controller.view.perform(.tab)
+    controller.view.keyDown(with: densityEvent())
+    check(model.previewOpen && model.query == "Density" && model.selectedClip?.id == selected,
+          "density shortcut preserves an open preview")
+    controller.view.perform(.enterFilter)
+    controller.view.perform(.text("base64"))
+    let filter = model.selectedFilter
+    controller.view.keyDown(with: densityEvent())
+    check(model.filterQuery == "base64" && model.selectedFilter == filter && model.query == "Density"
+          && settings.settings.pickerDensity == 10, "production density shortcut preserves filter mode without pasting or closing")
+    controller.view.perform(.escape)
+    check(model.selectedClip?.id == selected && model.query == "Density"
+          && controller.view.visibleRows.contains(where: { $0.index == model.selectedIndex }),
+          "returning from filters preserves queried selected clip visibility")
+    for width in [280, 360, 460, 560, 808] {
+        controller.view.setFrameSize(NSSize(width: width, height: 547))
+        for preview in [false, true] {
+            if model.previewOpen != preview { controller.view.perform(.tab) }
+            check(controller.view.barHints.contains("⌃⌥D"), "footer includes density shortcut at \(width), preview \(preview)")
+            check(InterfaceStyle.width(of: controller.view.barHints, font: InterfaceStyle.smallFont) <= controller.view.chrome.barRect.width,
+                  "footer fits without overlapping query at \(width), preview \(preview)")
+        }
+        if let directory = ProcessInfo.processInfo.environment["PICKER_SNAPSHOT_DIRECTORY"], width == 280 {
+            try! render(controller.view).representation(using: .png, properties: [:])!.write(
+                to: URL(fileURLWithPath: directory).appendingPathComponent("density-footer-280.png"))
+        }
+    }
+    // Exercise both responder entry points with the actual problematic character fields.
+    // AppKit translates these synthetic key codes using the current layout, not either supplied string.
+    for filters in [false, true] {
+        if filters { controller.view.perform(.enterFilter); controller.view.perform(.text("base64")) }
+        let step = model.step
+        let filterQuery = model.filterQuery
+        let selectedFilter = model.selectedFilter
+        let previewOpen = model.previewOpen
+        for equivalent in [false, true] {
+            for (flags, characters): (NSEvent.ModifierFlags, String) in [([.control, .option], "∂"),
+                ([.control, .option, .capsLock], "D")] {
+                let event = densityEvent(flags, characters: characters)
+                check(event.characters == characters && event.charactersIgnoringModifiers == characters,
+                      "regression fixture retains \(characters) in both NSEvent fields")
+                let before = changes.count
+                let choices = Settings.pickerDensityChoices
+                let index = choices.firstIndex(of: settings.settings.pickerDensity)!
+                if equivalent {
+                    check(controller.view.performKeyEquivalent(with: event), "key-equivalent route consumes \(characters)")
+                } else {
+                    controller.view.keyDown(with: event)
+                }
+                check(changes.count == before + 1 && settings.settings.pickerDensity == choices[(index + 1) % choices.count],
+                      "route \(equivalent) cycles exactly once for \(characters), filters \(filters)")
+                let held = densityEvent(flags, characters: characters, repeatKey: true)
+                if equivalent {
+                    check(controller.view.performKeyEquivalent(with: held), "key-equivalent route consumes held \(characters)")
+                } else {
+                    controller.view.keyDown(with: held)
+                }
+                check(changes.count == before + 1, "route \(equivalent) suppresses held \(characters), filters \(filters)")
+                check(model.step == step && model.query == "Density" && model.selectedClip?.id == selected
+                      && model.filterQuery == filterQuery && model.selectedFilter == selectedFilter
+                      && model.previewOpen == previewOpen && controller.savedSize == NSSize(width: 808, height: 547),
+                      "unicode/caps routing preserves clip/filter/query/preview and manual cap")
+                let selectedRow = filters ? model.selectedFilterIndex : model.selectedIndex
+                check(controller.view.visibleRows.contains(where: { $0.index == selectedRow }),
+                      "unicode/caps routing keeps selected row visible")
+            }
+            for event in [densityEvent(characters: "d", keyCode: 3),
+                          densityEvent([.control, .option, .shift]), densityEvent([.control, .option, .command])] {
+                let before = changes.count
+                if equivalent {
+                    check(!controller.view.performKeyEquivalent(with: event), "unrelated key and extra modifiers are not density equivalents")
+                } else {
+                    controller.view.keyDown(with: event)
+                }
+                check(changes.count == before && model.query == "Density" && model.step == step && model.filterQuery == filterQuery,
+                      "unrelated key and extra modifiers leave density and queries unchanged")
+            }
+        }
+    }
+}
 
 // MARK: snapshots for a visual check (only with PICKER_SNAPSHOT_DIRECTORY set)
 if let directory = ProcessInfo.processInfo.environment["PICKER_SNAPSHOT_DIRECTORY"] {
@@ -795,6 +971,16 @@ if let directory = ProcessInfo.processInfo.environment["PICKER_SNAPSHOT_DIRECTOR
             try! bitmap.representation(using: .png, properties: [:])!.write(
                 to: URL(fileURLWithPath: directory).appendingPathComponent("picker.png"))
         }
+        if appearanceName == .aqua {
+            for style in ClipIconStyle.allCases {
+                snapshotView.settings.iconStyle = style
+                snapshotView.needsDisplay = true
+                let familyBitmap = render(snapshotView)
+                try! familyBitmap.representation(using: .png, properties: [:])!.write(
+                    to: URL(fileURLWithPath: directory).appendingPathComponent("picker-\(style.rawValue).png"))
+            }
+            snapshotView.settings.iconStyle = .current
+        }
         for (name, keys) in [("list", [PickerKey]()), ("preview", [.down, .tab]), ("search", [.text("test")]), ("filters", [.enterFilter])] {
             snapshotModel.reset()
             keys.forEach { snapshotView.perform($0) }
@@ -815,6 +1001,289 @@ if let directory = ProcessInfo.processInfo.environment["PICKER_SNAPSHOT_DIRECTOR
             try! bitmap.representation(using: .png, properties: [:])!.write(to: url)
         }
     }
+}
+
+// MARK: optical comparison uses production rows and decoded synthetic PNG pixels, never history.
+// Every category is selected in turn, so the same fixtures exercise normal and selected ink.
+do {
+    var formatted = clip(302, "Project notes\nFormatted text keeps its original representation.")
+    formatted.hasFormattedText = true
+    var fallback = clip(304, "Image fallback")
+    fallback.kind = "image"
+    var thumbnail = clip(305, "Synthetic landscape thumbnail")
+    thumbnail.kind = "image"
+    var file = clip(306, "review.txt")
+    file.kind = "file"
+    var files = clip(307, "2 files · review.txt, notes.txt")
+    files.kind = "2 files"
+    let fixtures = [clip(301, "Design review notes\nKeep the menu bar simple."), formatted,
+        clip(303, "https://developer.apple.com/documentation/appkit"), fallback, thumbnail, file, files]
+    let names = ["text", "formatted", "link", "image-fallback", "thumbnail", "file", "files"]
+    let landscape = NSImage(size: NSSize(width: 64, height: 40), flipped: false) { rect in
+        NSColor(calibratedRed: 0.33, green: 0.68, blue: 0.86, alpha: 1).setFill(); rect.fill()
+        NSColor(calibratedRed: 0.97, green: 0.80, blue: 0.36, alpha: 1).setFill()
+        NSBezierPath(ovalIn: NSRect(x: 44, y: 24, width: 10, height: 10)).fill()
+        NSColor(calibratedRed: 0.20, green: 0.46, blue: 0.36, alpha: 1).setFill()
+        let hill = NSBezierPath()
+        hill.move(to: .zero); hill.line(to: NSPoint(x: 22, y: 29))
+        hill.line(to: NSPoint(x: 44, y: 0)); hill.close(); hill.fill()
+        NSColor(calibratedRed: 0.12, green: 0.32, blue: 0.28, alpha: 1).setFill()
+        let foreground = NSBezierPath()
+        foreground.move(to: NSPoint(x: 20, y: 0)); foreground.line(to: NSPoint(x: 49, y: 23))
+        foreground.line(to: NSPoint(x: 64, y: 0)); foreground.close(); foreground.fill()
+        return true
+    }
+    let png = NSBitmapImageRep(data: landscape.tiffRepresentation!)!.representation(using: .png, properties: [:])!
+    let decodedThumbnail = NSImage(data: png)!
+    for (densityName, density) in [("compact", 4), ("comfortable", 10)] {
+        for (appearanceName, appearance) in [("aqua", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
+            let comparisonModel = PickerModel(search: { _, _ in fixtures })
+            let comparison = PickerView(model: comparisonModel)
+            comparison.appearance = NSAppearance(named: appearance)
+            comparison.now = { start }
+            comparison.settings = Settings()
+            comparison.settings.pickerDensity = density
+            comparison.settings.pickerContentLines = 2
+            comparison.settings.maximumVisibleItems = 8
+            comparison.settings.showTimestamps = true
+            var loads: [Int64] = []
+            comparison.loadThumbnail = { id, _ in loads.append(id); return id == thumbnail.id ? decodedThumbnail : nil }
+            comparison.loadImageMetadata = { _ in ClipStore.ImageMetadata(format: "PNG", width: 640, height: 400, byteCount: 24000) }
+            comparisonModel.reset()
+            comparison.setFrameSize(NSSize(width: 560, height: comparison.desiredHeight(cap: 800, screenHeight: 1000)))
+            comparison.layout()
+            let initialRows = comparison.visibleRows.map(\.rect)
+            let initialLines = fixtures.map { comparison.contentLines(for: $0) }
+            let initialChrome = comparison.chrome
+            check(initialRows.count == fixtures.count, "optical fixture shows all seven rows: \(densityName)/\(appearanceName)")
+            for (selected, name) in names.enumerated() {
+                comparison.perform(.home)
+                for _ in 0..<selected { comparison.perform(.down) }
+                var captures: [NSImage] = []
+                var thumbnailPixels: Data?
+                var textPixels: Data?
+                var hintPixels: Data?
+                for style in [ClipIconStyle.current, .openOutlines, .editorialContentMarks] {
+                    comparison.settings.iconStyle = style
+                    let bitmap = render(comparison)
+                    check(comparison.visibleRows.map(\.rect) == initialRows
+                        && fixtures.map { comparison.contentLines(for: $0) } == initialLines,
+                        "optical tuning preserves row geometry and wrapping: \(style.rawValue)/\(name)")
+                    check(comparison.chrome.listRect == initialChrome.listRect && comparison.chrome.barRect == initialChrome.barRect
+                        && comparisonModel.selectedIndex == selected && comparisonModel.query.isEmpty,
+                        "optical tuning preserves chrome, query and selection: \(style.rawValue)/\(name)")
+                    let row = initialRows[4]
+                    let scale = CGFloat(bitmap.pixelsWide) / comparison.bounds.width
+                    let thumbnailRect = PickerView.aspectFitRect(for: decodedThumbnail.size,
+                        in: NSRect(x: 9, y: row.midY - 16, width: 32, height: 32))
+                    let pixelRect = NSRect(x: thumbnailRect.minX * scale, y: thumbnailRect.minY * scale,
+                        width: thumbnailRect.width * scale, height: thumbnailRect.height * scale)
+                    let pixels = NSBitmapImageRep(cgImage: bitmap.cgImage!.cropping(to: pixelRect)!).representation(using: .png, properties: [:])!
+                    func croppedPixels(_ rect: NSRect) -> Data {
+                        let pixels = NSRect(x: rect.minX * scale, y: rect.minY * scale,
+                            width: rect.width * scale, height: rect.height * scale)
+                        return NSBitmapImageRep(cgImage: bitmap.cgImage!.cropping(to: pixels)!).representation(using: .png, properties: [:])!
+                    }
+                    let text = croppedPixels(NSRect(x: 52, y: 0, width: comparison.bounds.width - 52,
+                        height: comparison.bounds.height))
+                    let hints = croppedPixels(comparison.chrome.barRect)
+                    if let textPixels, let hintPixels {
+                        check(text == textPixels && hints == hintPixels,
+                            "family switch leaves text, metadata, hints and wrapping pixels identical: \(name)")
+                    }
+                    textPixels = text; hintPixels = hints
+                    if let thumbnailPixels { check(pixels == thumbnailPixels, "real thumbnail pixels unchanged by family switch: \(name)") }
+                    thumbnailPixels = pixels
+                    captures.append(NSImage(cgImage: bitmap.cgImage!, size: comparison.bounds.size))
+                }
+                if let directory = ProcessInfo.processInfo.environment["PICKER_SNAPSHOT_DIRECTORY"] {
+                    try! FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+                    let size = NSSize(width: comparison.bounds.width * 3 + 24, height: comparison.bounds.height + 24)
+                    let sheet = NSImage(size: size, flipped: true) { _ in
+                        InterfaceStyle.panelBackground.setFill(); NSRect(origin: .zero, size: size).fill()
+                        for (column, title) in ["Current", "Refined Open outlines", "Editorial content marks"].enumerated() {
+                            let x = CGFloat(column) * (comparison.bounds.width + 12)
+                            InterfaceStyle.draw("\(title) · \(densityName) · selected \(name)",
+                                in: NSRect(x: x + 8, y: 0, width: comparison.bounds.width - 16, height: 24))
+                            captures[column].draw(in: NSRect(x: x, y: 24, width: comparison.bounds.width,
+                                height: comparison.bounds.height), from: .zero, operation: .sourceOver,
+                                fraction: 1, respectFlipped: true, hints: nil)
+                        }
+                        return true
+                    }
+                    var output: Data!
+                    comparison.effectiveAppearance.performAsCurrentDrawingAppearance {
+                        output = NSBitmapImageRep(data: sheet.tiffRepresentation!)!.representation(using: .png, properties: [:])!
+                    }
+                    try! output.write(to: URL(fileURLWithPath: directory)
+                        .appendingPathComponent("picker-optical-\(densityName)-\(appearanceName)-\(name).png"))
+                }
+            }
+            check(loads == [fallback.id, thumbnail.id], "optical comparison reuses real and unavailable thumbnail cache across selections and families")
+        }
+    }
+}
+
+// MARK: family propagation refreshes in place and preserves thumbnail precedence
+sequenceController.prepareToOpen()
+sequenceController.view.perform(.text("clip"))
+sequenceController.view.perform(.down)
+let beforeFamilyQuery = sequenceModel.query
+let beforeFamilySelection = sequenceModel.selectedIndex
+let beforeFamilySize = sequenceController.savedSize
+for style in ClipIconStyle.allCases {
+    sequenceSettings.update { $0.iconStyle = style }
+    sequenceController.applySettings()
+    check(sequenceController.view.settings.iconStyle == style, "controller applies family immediately")
+    check(sequenceModel.query == beforeFamilyQuery && sequenceModel.selectedIndex == beforeFamilySelection,
+          "family refresh preserves query and selection")
+    check(sequenceController.savedSize == beforeFamilySize, "family refresh preserves width and manual height cap")
+}
+var familyThumbnailLoads = 0
+let familyThumbnailModel = PickerModel(search: { _, _ in [symbolImage] })
+let familyThumbnailView = PickerView(model: familyThumbnailModel)
+familyThumbnailModel.reset()
+familyThumbnailView.loadThumbnail = { _, _ in
+    familyThumbnailLoads += 1
+    return NSImage(size: NSSize(width: 32, height: 16), flipped: false) { rect in
+        NSColor.systemRed.setFill(); rect.fill(); return true
+    }
+}
+for style in ClipIconStyle.allCases {
+    familyThumbnailView.settings.iconStyle = style
+    familyThumbnailView.settings.showTypeIcons = false
+    familyThumbnailView.setFrameSize(NSSize(width: 460, height: 100))
+    let bitmap = render(familyThumbnailView)
+    check(bitmap.pixelsWide > 0 && familyThumbnailView.cachedThumbnailCount == 1,
+          "real thumbnail remains visible with type icons off for \(style.rawValue)")
+}
+check(familyThumbnailLoads == 1, "family changes reuse cached thumbnail instead of rereading disk")
+familyThumbnailView.resetThumbnailCache()
+familyThumbnailView.loadThumbnail = { _, _ in nil }
+for style in ClipIconStyle.allCases {
+    familyThumbnailView.settings.iconStyle = style
+    familyThumbnailView.settings.showTypeIcons = true
+    check(render(familyThumbnailView).pixelsWide > 0, "unavailable image uses family fallback: \(style.rawValue)")
+}
+
+// MARK: local control panel footer and production application/controller/panel navigation.
+do {
+    let suite = "control-panel-gear-\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+    let settings = SettingsStore(defaults: defaults)
+    let model = PickerModel(search: search)
+    let picker = PickerController(store: sizeStore, settingsStore: settings, monitor: sizeMonitor,
+        defaults: defaults, model: model, screenFrame: { NSRect(x: 0, y: 0, width: 1200, height: 900) })
+    let panelView = SettingsPanelView()
+    let panel = SettingsPanelWindowController(view: panelView, placement: {
+        (nil, NSRect(x: 0, y: 0, width: 1200, height: 900))
+    })
+    let fixture = SettingsPanelContent(settings: settings.settings,
+        statistics: StoreStatistics(clipCount: 3, clipBytes: 30, diskBytes: 0), clipboardLine: "Synthetic",
+        frontmostApp: nil, notices: [], appNames: [:], hotkeyLabel: nil)
+    panel.prepareToOpen(fixture)
+    panelView.navigate(to: .settings)
+    (panelView.control(named: "clearHistory") as? PanelButton)?.press()
+    check(panelView.confirmation != nil, "synthetic Settings confirmation is pending before footer navigation")
+    var opens = 0
+    AppDelegate.connectControlPanelNavigation(picker: picker) { page in
+        opens += 1
+        check(!picker.isOpen, "picker dismisses before opening the control panel")
+        panel.prepareToOpen(fixture, page: page)
+    }
+    picker.prepareToOpen()
+    let view = picker.view
+    let selected = model.selectedClip?.id
+    check(view.controlPanelButton.accessibilityRole() == .button && view.controlPanelButton.accessibilityLabel() == "Open control panel",
+          "footer exposes a native accessible control panel button")
+    check(view.controlPanelButton.title.isEmpty && view.controlPanelButton.imagePosition == .imageOnly
+          && view.controlPanelButton.image != nil && view.controlPanelButton.toolTip == "Open control panel",
+          "footer is gear-only with the exact control panel tooltip")
+    check(view.controlPanelButton.accessibilityPerformPress(), "Control panel accessibility action succeeds")
+    check(opens == 1 && panelView.page == .main && panelView.confirmation == nil,
+          "production app callback routes once to Main and clears old confirmation")
+    check(panel.panel.frame.height == panelView.preferredHeight && model.selectedClip?.id == selected,
+          "Main has measured production height and never recalls or selects a clip")
+    check(panelView.control(named: "clearHistory") == nil,
+          "footer destination Main has no Clear history action")
+    check(view.controlPanelButton.measuredWidth >= 28 && view.controlPanelButtonRect.height == view.chrome.barRect.height,
+          "gear reserves a comfortable native hit width within the existing footer height")
+    panel.prepareToOpen(fixture)
+    check(panelView.page == .main && panelView.confirmation == nil, "ordinary panel open still defaults to Main")
+    for width in [280, 460, 808] {
+        for filters in [false, true] {
+            model.reset()
+            if filters { view.perform(.enterFilter) }
+            view.perform(.text("odd"))
+            for preview in [false, true] {
+                if !filters && model.previewOpen != preview { view.perform(.tab) }
+                view.setFrameSize(NSSize(width: width, height: 450))
+                check(view.bounds.contains(view.controlPanelButtonRect) && view.controlPanelButton.frame == view.controlPanelButtonRect,
+                      "footer link stays contained at \(width), filters=\(filters), preview=\(preview)")
+                check(view.hitTest(view.convert(NSPoint(x: view.controlPanelButtonRect.midX, y: view.controlPanelButtonRect.midY), to: view.superview)) === view.controlPanelButton,
+                      "gear hit shape routes to button, never recall or drag")
+                check(view.rowIndex(at: NSPoint(x: view.controlPanelButtonRect.midX, y: view.controlPanelButtonRect.midY)) == nil,
+                      "footer link is outside all recall rows")
+                check(InterfaceStyle.width(of: view.barHints, font: InterfaceStyle.smallFont) <= view.footerTextRect.width
+                      && view.footerTextRect.maxX < view.controlPanelButtonRect.minX,
+                      "measured hints never collide with the gear at \(width)")
+                let statusWidth = view.footerTextRect.width - InterfaceStyle.width(of: view.barHints, font: InterfaceStyle.smallFont) - InterfaceStyle.gap
+                let displayedStatus = view.footerStatus(fitting: statusWidth)
+                check(InterfaceStyle.width(of: displayedStatus, font: InterfaceStyle.smallFont) <= statusWidth,
+                      "query/count fit remaining measured footer width at \(width)")
+                if let directory = ProcessInfo.processInfo.environment["PICKER_SNAPSHOT_DIRECTORY"] {
+                    for (name, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
+                        view.appearance = NSAppearance(named: appearance)
+                        try! render(view).representation(using: .png, properties: [:])!.write(to:
+                            URL(fileURLWithPath: directory).appendingPathComponent("control-panel-gear-\(name)-\(width)-filters\(filters)-preview\(preview).png"))
+                    }
+                }
+            }
+        }
+    }
+    let shiftTab = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .shift, timestamp: 0,
+        windowNumber: view.window!.windowNumber, context: nil, characters: "\t", charactersIgnoringModifiers: "\t",
+        isARepeat: false, keyCode: 48)!
+    view.window!.makeFirstResponder(view)
+    view.keyDown(with: shiftTab)
+    check(view.window!.firstResponder === view.controlPanelButton, "reverse Tab focuses local footer without changing preview")
+    let enter = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+        windowNumber: view.window!.windowNumber, context: nil, characters: "\r", charactersIgnoringModifiers: "\r",
+        isARepeat: false, keyCode: 36)!
+    view.controlPanelButton.keyDown(with: enter)
+    check(opens == 2, "focused Return invokes production control panel chain exactly once")
+    let commandEnter = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
+        windowNumber: view.window!.windowNumber, context: nil, characters: "\r", charactersIgnoringModifiers: "\r",
+        isARepeat: false, keyCode: 36)!
+    view.controlPanelButton.keyDown(with: commandEnter)
+    check(opens == 2 && model.step != .clips, "modified Return from footer preserves filter hotkey instead of opening the control panel")
+    view.controlPanelButton.performClick(nil)
+    check(opens == 3 && model.selectedClip?.id != nil, "native button click routes once without recalling a row")
+    let space = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+        windowNumber: view.window!.windowNumber, context: nil, characters: " ", charactersIgnoringModifiers: " ",
+        isARepeat: false, keyCode: 49)!
+    view.controlPanelButton.keyDown(with: space)
+    check(opens == 4, "focused Space opens Main once")
+    view.window!.makeFirstResponder(view.controlPanelButton)
+    view.controlPanelButton.keyDown(with: shiftTab)
+    check(view.window!.firstResponder === view, "Tab from the control panel button returns to picker without opening preview")
+    model.reset()
+    view.window!.makeFirstResponder(view.controlPanelButton)
+    let down = NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+        windowNumber: view.window!.windowNumber, context: nil, characters: "", charactersIgnoringModifiers: "",
+        isARepeat: false, keyCode: 125)!
+    view.controlPanelButton.keyDown(with: down)
+    check(view.window!.firstResponder === view && model.selectedIndex == 1, "arrow from footer returns to original picker routing")
+    view.window!.makeFirstResponder(view)
+    view.perform(.escape)
+    model.reset()
+    view.settings.showPasteSpecial = true
+    model.alwaysPastePlainText = true
+    view.perform(.text("odd"))
+    view.setFrameSize(NSSize(width: 280, height: 450))
+    check(view.barHints.contains("plain") && view.barHints.contains("esc clear"), "narrow hints keep primary plain action and accurate Escape")
+    check(!PickerView(model: model).performKeyEquivalent(with: shiftTab), "closed detached view has no control panel key binding")
 }
 
 print("\(checks) checks, \(failures) failed")

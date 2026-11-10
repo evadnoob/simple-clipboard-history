@@ -9,6 +9,8 @@ final class PickerView: NSView {
     var onAction: ((PickerAction) -> Void)?
     /// Called with the stable ID captured when the context menu was opened.
     var onRemoveClip: ((Int64) -> Void)?
+    var onOpenControlPanel: (() -> Void)?
+    let controlPanelButton = PickerControlPanelButton()
     var onContentChanged: (() -> Void)?
     /// Loads the stored items of a clip for the separate preview.
     var loadItems: ((Int64) -> [[Representation]])?
@@ -38,6 +40,13 @@ final class PickerView: NSView {
     init(model: PickerModel) {
         self.model = model
         super.init(frame: NSRect(origin: .zero, size: InterfaceStyle.pickerSize))
+        controlPanelButton.onPress = { [weak self] in self?.onOpenControlPanel?() }
+        controlPanelButton.onReturnToPicker = { [weak self] event in
+            guard let self else { return }
+            self.window?.makeFirstResponder(self)
+            if event.keyCode != 48 { self.keyDown(with: event) }
+        }
+        addSubview(controlPanelButton)
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
@@ -116,11 +125,13 @@ final class PickerView: NSView {
 
     override func layout() {
         super.layout()
+        controlPanelButton.frame = controlPanelButtonRect
         updateRowCount()
     }
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
+        controlPanelButton.frame = controlPanelButtonRect
         updateRowCount()
         needsDisplay = true
     }
@@ -181,7 +192,12 @@ final class PickerView: NSView {
                 textX += 42
             } else if settings.showTypeIcons {
                 let symbolRect = Self.typeSymbolRect(in: row, x: textX, density: settings.pickerDensity)
-                InterfaceStyle.drawSymbol(Self.symbolName(for: clip), in: symbolRect, color: foreground)
+                if settings.iconStyle == .current {
+                    InterfaceStyle.drawSymbol(Self.symbolName(for: clip), in: symbolRect, color: foreground)
+                } else {
+                    ClipTypeIcon.draw(category: ClipIconClassifier.category(for: clip), style: settings.iconStyle,
+                                      in: symbolRect, color: foreground)
+                }
                 textX += symbolRect.width + 10
             }
             let detail = settings.showTimestamps ? Self.rowDetail(clip, now: now()) : ""
@@ -311,13 +327,7 @@ final class PickerView: NSView {
 
     /// Symbols use only the bounded summary, never loading stored representations while drawing rows.
     static func symbolName(for clip: ClipSummary) -> String {
-        if clip.kind == "image" { return "photo" }
-        if clip.kind == "files" { return "doc.on.doc" }
-        let firstLine = (clip.contentPreview.isEmpty ? clip.preview : clip.contentPreview).prefix(2048)
-            .split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
-        if let url = URL(string: firstLine.trimmingCharacters(in: .whitespaces)),
-           ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil { return "link" }
-        return "doc.text"
+        ClipTypeIcon.symbolName(category: ClipIconClassifier.currentCategory(for: clip), style: .current)
     }
 
     /// Custom-drawn rows must explicitly use the system's selected foreground over blue selection.
@@ -368,16 +378,45 @@ final class PickerView: NSView {
                                 attributes: [.font: InterfaceStyle.font, .foregroundColor: color, .paragraphStyle: style])
     }
 
-    private func drawBar(in rect: NSRect) {
+    var controlPanelButtonRect: NSRect {
+        let bar = chrome.barRect
+        return NSRect(x: bar.maxX - controlPanelButton.measuredWidth, y: bar.minY,
+                      width: controlPanelButton.measuredWidth, height: bar.height)
+    }
+
+    var footerTextRect: NSRect {
+        let bar = chrome.barRect
+        return NSRect(x: bar.minX, y: bar.minY, width: max(0, controlPanelButtonRect.minX - bar.minX - 8), height: bar.height)
+    }
+
+    private func drawBar(in unusedRect: NSRect) {
+        let rect = footerTextRect
         let gap = InterfaceStyle.gap
         let hints = barHints
         let hintsWidth = min(InterfaceStyle.width(of: hints, font: InterfaceStyle.smallFont), rect.width)
         InterfaceStyle.draw(hints, in: NSRect(x: rect.maxX - hintsWidth, y: rect.minY, width: hintsWidth, height: rect.height),
                             font: InterfaceStyle.smallFont, color: .secondaryLabelColor, alignment: .right)
         let statusWidth = max(0, rect.width - hintsWidth - gap)
-        let status = Self.tail(of: barStatus, fitting: statusWidth, font: InterfaceStyle.smallFont)
+        let status = footerStatus(fitting: statusWidth)
         InterfaceStyle.draw(status, in: NSRect(x: rect.minX, y: rect.minY, width: statusWidth, height: rect.height),
                             font: InterfaceStyle.smallFont, color: .secondaryLabelColor)
+    }
+
+    func footerStatus(fitting width: CGFloat) -> String {
+        guard InterfaceStyle.width(of: barStatus, font: InterfaceStyle.smallFont) > width else { return barStatus }
+        let query: String
+        let count: String
+        switch model.step {
+        case .clips:
+            query = model.query
+            count = model.rows.count >= PickerModel.resultLimit ? "\(model.rows.count)+" : "\(model.rows.count)"
+        case .filters:
+            query = model.filterQuery
+            count = "\(model.filterRows.filter { if case .filter = $0 { return true }; return false }.count)"
+        }
+        let prefix = count + " "
+        let remaining = max(0, width - InterfaceStyle.width(of: prefix, font: InterfaceStyle.smallFont))
+        return prefix + Self.tail(of: query, fitting: remaining, font: InterfaceStyle.smallFont)
     }
 
     /// The left of the bar: the count, and the typed text when there is some. There is no input field.
@@ -395,14 +434,40 @@ final class PickerView: NSView {
         }
     }
 
+    private var footerHintWidth: CGFloat { footerTextRect.width - (barStatus.isEmpty ? 0 : 56) }
+
     /// The key hints at the right of the bar. "plain" and "formatted" swap with Always Paste Plain Text.
     var barHints: String {
-        if case .filters = model.step { return "\u{21A9} \(recallVerb)  esc back" }
-        let main = "\u{21A9} \(recallVerb)\(model.alwaysPastePlainText ? " plain" : "")"
-        let special = settings.showPasteSpecial ? "  \u{21E7}\u{21A9} \(model.alwaysPastePlainText ? "formatted" : "plain")" : ""
-        let escape = model.previewOpen ? "back" : model.query.isEmpty ? "close" : "clear"
-        let extras = bounds.width >= 560 ? "  ⌘↩ filter  tab preview" : ""
-        return "\(main)\(special)\(extras)  esc \(escape)"
+        let base: String
+        if case .filters = model.step {
+            base = "↩ \(recallVerb)  esc back"
+        } else {
+            let main = "↩ \(recallVerb)\(model.alwaysPastePlainText ? " plain" : "")"
+            let special = settings.showPasteSpecial ? "  ⇧↩ \(model.alwaysPastePlainText ? "formatted" : "plain")" : ""
+            let escape = model.previewOpen ? "back" : model.query.isEmpty ? "close" : "clear"
+            let extras = bounds.width >= 560 ? "  ⌘↩ filter  tab preview" : ""
+            base = "\(main)\(special)\(extras)  esc \(escape)"
+        }
+        let index = Settings.pickerDensityChoices.firstIndex(of: settings.pickerDensity) ?? 0
+        let label = Settings.pickerDensityLabels[index]
+        for hint in ["⌃⌥D \(label)", "⌃⌥D density", "⌃⌥D"] {
+            let combined = "\(base)  \(hint)"
+            if InterfaceStyle.width(of: combined, font: InterfaceStyle.smallFont) <= footerHintWidth {
+                return combined
+            }
+        }
+        let escape: String
+        if case .filters = model.step { escape = "back" }
+        else { escape = model.previewOpen ? "back" : model.query.isEmpty ? "close" : "clear" }
+        let primary: String
+        if case .clips = model.step, model.alwaysPastePlainText { primary = "plain" }
+        else { primary = recallVerb }
+        let compact = "↩ \(primary)  esc \(escape)"
+        for hint in ["⌃⌥D density", "⌃⌥D"] {
+            let combined = "\(compact)  \(hint)"
+            if InterfaceStyle.width(of: combined, font: InterfaceStyle.smallFont) <= footerHintWidth { return combined }
+        }
+        return InterfaceStyle.width(of: base, font: InterfaceStyle.smallFont) <= footerTextRect.width ? base : compact
     }
 
     /// The end of the text that fits the width, so the end of a long query stays visible.
@@ -416,14 +481,20 @@ final class PickerView: NSView {
     // MARK: keys and mouse
 
     override func keyDown(with event: NSEvent) {
+        // Reverse Tab enters the footer; plain Tab retains preview behavior.
+        if event.keyCode == 48, event.modifierFlags.intersection([.command, .option, .control, .shift]) == .shift {
+            window?.makeFirstResponder(controlPanelButton)
+            return
+        }
         guard let key = Self.pickerKey(for: event) else { super.keyDown(with: event); return }
+        if key == .cycleDensity && event.isARepeat { return }
         perform(key)
     }
 
     /// Key equivalents (Cmd-digit) reach the view here before keyDown.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard window?.firstResponder === self, let key = Self.pickerKey(for: event) else { return false }
-        perform(key)
+        if key != .cycleDensity || !event.isARepeat { perform(key) }
         return true
     }
 
@@ -460,6 +531,11 @@ final class PickerView: NSView {
         default: break
         }
         let plain = event.charactersIgnoringModifiers ?? ""
+        // Re-translate the key using the current layout without Option or Caps Lock; either stored
+        // character field may still contain ∂ or D. AppKit does not change the input dead-key state.
+        if flags == [.control, .option], event.characters(byApplyingModifiers: [])?.lowercased() == "d" {
+            return .cycleDensity
+        }
         if flags == .command {
             if let digit = Int(plain), (1...9).contains(digit) { return .recallNumber(digit) }
             if plain == "w" { return .escape }
@@ -490,13 +566,13 @@ final class PickerView: NSView {
     override func accessibilityRole() -> NSAccessibility.Role? { .list }
     override func accessibilityLabel() -> String? { "Clipboard history" }
     override func accessibilityChildren() -> [Any]? {
-        visibleRows.compactMap { entry -> PickerAccessibilityRow? in
+        let rows = visibleRows.compactMap { entry -> PickerAccessibilityRow? in
             let label: String
             let selected: Bool
             switch model.step {
             case .clips:
                 let clip = model.rows[entry.index]
-                label = contentLines(for: clip).joined(separator: "\n") + ", " + clip.kind
+                label = contentLines(for: clip).joined(separator: "\n") + ", " + ClipIconClassifier.category(for: clip).rawValue
                 selected = entry.index == model.selectedIndex
             case .filters:
                 guard case .filter(let filter) = model.filterRows[entry.index] else { return nil }
@@ -516,6 +592,7 @@ final class PickerView: NSView {
             }
             return row
         }
+        return rows + [controlPanelButton]
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {
@@ -603,4 +680,48 @@ final class PickerView: NSView {
 private final class PickerAccessibilityRow: NSAccessibilityElement {
     var press: (() -> Void)?
     override func accessibilityPerformPress() -> Bool { press?(); return press != nil }
+}
+
+/// Local footer navigation, never a global key equivalent. Reverse Tab enters; Tab
+/// returns to the picker, and typing/arrows continue through the existing key path.
+final class PickerControlPanelButton: NSButton {
+    var onPress: (() -> Void)?
+    var onReturnToPicker: ((NSEvent) -> Void)?
+    var measuredWidth: CGFloat { 32 }
+    init() {
+        super.init(frame: .zero)
+        title = ""
+        font = InterfaceStyle.smallFont
+        image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
+        imagePosition = .imageOnly
+        imageScaling = .scaleProportionallyDown
+        isBordered = false
+        focusRingType = .none
+        contentTintColor = .secondaryLabelColor
+        target = self
+        action = #selector(openControlPanel)
+        setAccessibilityRole(.button)
+        toolTip = "Open control panel"
+        setAccessibilityLabel("Open control panel")
+        setAccessibilityHelp("Shift-Tab focuses this button; Space or Return opens the control panel.")
+        setAccessibilityIdentifier("pickerControlPanel")
+    }
+    required init?(coder: NSCoder) { fatalError("not used") }
+    override var acceptsFirstResponder: Bool { true }
+    @objc private func openControlPanel() { onPress?() }
+    override func accessibilityPerformPress() -> Bool { onPress?(); return true }
+    override func keyDown(with event: NSEvent) {
+        if event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
+           [UInt16(49), 36, 76].contains(event.keyCode) { onPress?() }
+        else { onReturnToPicker?(event) }
+    }
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        if window?.firstResponder === self {
+            NSColor.keyboardFocusIndicatorColor.setFill()
+            NSRect(x: 4, y: bounds.maxY - 2, width: bounds.width - 8, height: 2).fill()
+        }
+    }
+    override func becomeFirstResponder() -> Bool { needsDisplay = true; return true }
+    override func resignFirstResponder() -> Bool { needsDisplay = true; return true }
 }

@@ -17,6 +17,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var picker: PickerController?
     private var hotkey: GlobalHotkey?
 
+    /// The same local callback chain is exercised with synthetic panel content in the harness.
+    static func connectControlPanelNavigation(picker: PickerController,
+                                          openPanel: @escaping (SettingsPanelView.Page) -> Void) {
+        picker.onOpenControlPanel = { openPanel(.main) }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         let settingsStore = SettingsStore()
         let store: ClipStore
@@ -36,8 +42,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkey.register(settingsStore.settings.pickerHotkey)
         let statusItemController = StatusItemController(store: store, settingsStore: settingsStore, monitor: monitor,
                                                   picker: picker, hotkey: hotkey)
-        settingsStore.onChange = { [weak hotkey, weak monitor] settings in
+        Self.connectControlPanelNavigation(picker: picker) { [weak statusItemController] page in
+            statusItemController?.openPanel(page: page)
+        }
+        settingsStore.onChange = { [weak hotkey, weak monitor, weak picker] settings in
             if let hotkey, hotkey.status != .registered(settings.pickerHotkey) { hotkey.register(settings.pickerHotkey) }
+            picker?.applySettings()
             monitor?.enforceRetention()
         }
         monitor.start()

@@ -13,7 +13,7 @@ Press **Shift-Command-V**, then type to find a clip. There is no search box to f
 - **Shift-Return:** use the alternate representation: plain text by default, or formatting when the default is plain text.
 - **Command-Return:** open Paste Special text filters, when enabled.
 - **Command-1 through Command-9:** recall a numbered clip.
-- **Tab:** preview the selected clip.
+- **Tab:** preview the selected clip. **Shift-Tab** focuses the footer’s icon-only gear button (tooltip: **Open control panel**); Space or Return opens the existing menu bar control panel on **Main**, with statistics and controls. Tab returns focus to the picker; typing or arrows also return to the picker and keep their normal behavior.
 - **Escape:** dismiss the preview, clear a search, or close the picker. In Paste Special, return to the clips first.
 
 The picker shows actual lines of copied content. Its height follows the results, bounded by your visible-item setting and display. Resize its edges or corners to change the width or height cap.
@@ -24,12 +24,18 @@ Click the clipboard icon in the menu bar. The icon stays icon-only; history coun
 
 ![Clipboard control panel](docs/screenshots/control-panel.png)
 
-- **History:** pause capture, launch at login, change the picker shortcut, and exclude apps.
-- **Paste:** automatic paste or clipboard-only recall, formatting or plain text, and Paste Special.
-- **Limits:** item count, total stored content size, retention age, and maximum size of one copy.
-- **Picker UI:** width, content lines, density, visible items, type icons, and timestamps.
+The main view retains history statistics, recent copy activity, all existing settings and primary actions except Clear history, which lives in Settings. Click **Settings** for the new **Icon style** selector inside the same panel. The **Main** breadcrumb or Escape returns to the main view.
 
-Settings apply immediately and persist across launches. Clear History asks for confirmation. **Import and Export are visible but not implemented.**
+- **History:** keep clipboard history, launch at login and ignored apps. The picker shortcut stays visible on the main view.
+- **Paste:** automatic paste or clipboard-only recall, formatting or plain text, and Paste Special.
+- **Limits:** item count, total stored content size, and maximum size of one copy.
+- **Look and feel:** width, actual content lines, density, maximum visible items, type icons, and timestamps.
+
+**Icon style** selects Current (the default), Open outlines, Compact silhouettes, Framed symbols, or Editorial content marks for all picker type icons. Real image thumbnails remain unchanged, including when Show type icons is off. Families do not change the menu bar identity or panel action icons.
+
+New families distinguish plain text, recorded rich-text/HTML representations, bounded first-line web links, images without thumbnails, and single or multiple stored files. Unknown types use a neutral fallback. The artwork vocabulary also includes folder, code, terminal, structured data, email, color, explicitly sensitive and mixed content symbols, but those remain renderer-only until reliable explicit metadata exists. No code, command or password heuristics are used, and the sensitive symbol does not imply protection.
+
+Settings apply immediately and persist across launches. **Clear history…** is in a separate section below the icon styles in **Settings**, not on Main. It asks for confirmation with Cancel focused by default; choose **Clear history** explicitly to permanently delete all history. **Import and Export are visible but not implemented.**
 
 Screenshots use synthetic clipboard content rendered by the app's test harnesses.
 

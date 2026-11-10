@@ -45,7 +45,7 @@ struct SettingsPanelActions {
     var close: () -> Void = {}
 }
 
-/// Flat control panel with direct settings. Changes apply immediately; deleting clips asks inside the panel.
+/// Flat control panel with an in-panel settings page. Changes apply immediately; deleting clips asks inside the panel.
 final class SettingsPanelView: NSView {
     static let width: CGFloat = 390
     static func headerCount(_ count: Int) -> String {
@@ -63,6 +63,22 @@ final class SettingsPanelView: NSView {
     enum Confirmation: Equatable {
         case clearHistory(clipCount: Int)
         case keepHistory(limit: Int, deleting: Int)
+    }
+
+    enum Page { case main, settings }
+    private(set) var page: Page = .main
+
+    func navigate(to page: Page) {
+        window?.makeFirstResponder(self)
+        confirmation = nil
+        let showFocus = focused?.isFocused == true
+        self.page = page
+        focused = nil
+        scrollView.contentView.scroll(to: .zero)
+        rebuild()
+        setFocus(control(named: page == .settings ? "back" : "settings"), showFocus: showFocus)
+        (control(named: "iconStyle") as? PanelIconStyleChoices)?.revealSelectedRow()
+        NSAccessibility.post(element: self, notification: .layoutChanged)
     }
 
     var actions = SettingsPanelActions()
@@ -114,10 +130,13 @@ final class SettingsPanelView: NSView {
     }
 
     /// Opening starts without a confirmation or focus.
-    func resetInteraction() {
+    func resetInteraction(page: Page = .main) {
         confirmation = nil
+        self.page = page
         focused = nil
+        scrollView.contentView.scroll(to: .zero)
         rebuild()
+        if page == .settings { (control(named: "iconStyle") as? PanelIconStyleChoices)?.revealSelectedRow() }
     }
 
     func control(named name: String) -> PanelControl? { controls.first { $0.partName == name } }
@@ -134,6 +153,8 @@ final class SettingsPanelView: NSView {
     private func rebuild() {
         guard let content else { return }
         let focusedName = focused?.partName
+        let focusedStyleIndex = (focused as? PanelIconStyleChoices)?.focusedIndex
+        let showFocus = focused?.isFocused == true
         settingsBody.subviews.forEach { $0.removeFromSuperview() }
         footer.subviews.forEach { $0.removeFromSuperview() }
         settingsBody.separators = []
@@ -215,148 +236,231 @@ final class SettingsPanelView: NSView {
             y += controlHeight
         }
 
-        let header = SettingsPanelHeaderView(frame: NSRect(x: 0, y: 0, width: width, height: 64))
-        let icon = NSImageView(frame: NSRect(x: gap, y: 8, width: 24, height: 26))
-        icon.image = ClipboardIcon.image(size: NSSize(width: 24, height: 26), accessibilityDescription: "Clipboard")
-        icon.imageScaling = .scaleAxesIndependently
-        icon.contentTintColor = .labelColor
-        icon.setAccessibilityLabel("Clipboard")
-        header.addSubview(icon)
-        let title = NSTextField(labelWithString: "Simple Clipboard History")
-        title.font = .systemFont(ofSize: 16, weight: .bold)
-        let titleWidth = width - (gap + 32) - 68 - gap
-        title.frame = NSRect(x: gap + 32, y: 8, width: titleWidth, height: 24)
-        title.setAccessibilityIdentifier("panelTitle")
-        title.setAccessibilityLabel("Simple Clipboard History")
-        header.addSubview(title)
-        let chart = CopyActivityChartView(days: 5, now: content.now, buckets: content.copyActivity)
-        chart.frame = NSRect(x: width - 68, y: 9, width: 54, height: 17)
-        chart.setAccessibilityLabel("Copy activity over the last 5 days, in 20-hour groups")
-        header.addSubview(chart)
-        activityChart = chart
-        let stats = content.statistics
-        let state = settings.capturePaused ? "Paused" : "Active"
-        let count = stats.map { Self.headerCount($0.clipCount) } ?? "Unavailable"
-        let percent = stats.map { min(100, Int(Double($0.clipBytes) * 100 / (Double(settings.maximumHistoryMegabytes) * 1_048_576))) } ?? 0
-        let bytes = stats.map { "\(Format.bytes($0.clipBytes)) / \(settings.maximumHistoryMegabytes) MB (\(percent)%)" } ?? "Unavailable"
-        let countLabel = stats == nil ? "Unavailable items" : "\(count) items"
-        let groups = [(state, gap + 18, 68.0), (countLabel, 107.0, 96.0), (bytes, 215.0, 167.0)]
-        for (index, group) in groups.enumerated() {
-            let label = NSTextField(labelWithString: group.0)
-            label.font = .systemFont(ofSize: 12, weight: .semibold)
-            label.frame = NSRect(x: group.1, y: 40, width: group.2, height: 18)
-            label.setAccessibilityIdentifier("headerStat:\(index)")
-            label.setAccessibilityLabel(group.0)
-            header.addSubview(label)
-            if index == 0 {
-                let square = NSView(frame: NSRect(x: gap, y: 45, width: 10, height: 10))
-                square.wantsLayer = true
-                square.layer?.backgroundColor = (settings.capturePaused ? NSColor.secondaryLabelColor : NSColor.systemGreen).cgColor
-                square.setAccessibilityLabel(state)
-                header.addSubview(square)
+        func confirmationControls(_ confirmation: Confirmation, inset: CGFloat) {
+            let question: String
+            switch confirmation {
+            case .clearHistory: question = "Clear all clipboard history?"
+            case .keepHistory(let limit, let deleting):
+                question = "Keep \(limit.formatted()): delete the \(deleting.formatted()) oldest clips?"
             }
-            if index < 2 {
-                let dividerX = index == 0 ? 100 : 207
-                let divider = NSView(frame: NSRect(x: dividerX, y: 40, width: 1, height: 18))
-                divider.wantsLayer = true
-                divider.layer?.backgroundColor = NSColor.separatorColor.cgColor
-                header.addSubview(divider)
+            let clearing: Bool
+            if case .clearHistory = confirmation { clearing = true } else { clearing = false }
+            let delete = PanelButton(partName: "confirmDelete", title: clearing ? "Clear history" : "Delete")
+            delete.isDefault = !clearing
+            delete.onPress = { [weak self] in self?.confirm() }
+            let cancel = PanelButton(partName: "confirmCancel", title: "Cancel")
+            cancel.isDefault = clearing
+            cancel.onPress = { [weak self] in self?.cancelConfirmation() }
+            let deleteX = width - inset - delete.preferredWidth
+            let cancelX = deleteX - inset - cancel.preferredWidth
+            text(question, x: inset, width: width - inset * 2, height: controlHeight)
+            y += controlHeight
+            if clearing {
+                text("This cannot be undone.", x: inset, width: width - inset * 2, height: 16,
+                     font: InterfaceStyle.smallFont, color: .secondaryLabelColor, identifier: "clearHistoryWarning")
+                y += 16
             }
+            add(cancel, x: cancelX)
+            add(delete, x: deleteX)
         }
-        container.addSubview(header)
-        y += 66
-        section("History")
-        checkbox("pause", "Keep clipboard history", !settings.capturePaused) { [weak self] on in
-            self?.actions.update { $0.capturePaused = !on }
-        }
-        if let shortcut = content.hotkeyLabel {
-            let hint = NSTextField(labelWithString: shortcut)
-            hint.font = .systemFont(ofSize: 12)
-            hint.alignment = .right
-            hint.textColor = .secondaryLabelColor
-            hint.frame = NSRect(x: width - rowInset - 72, y: y - rowHeight + 2, width: 72, height: 18)
-            hint.setAccessibilityLabel("Picker shortcut \(shortcut)")
-            hint.setAccessibilityIdentifier("pickerShortcutHint")
-            settingsBody.addSubview(hint)
-        }
-        checkbox("login", "Launch at login", content.loginEnabled) { [weak self] on in self?.actions.setLoginEnabled(on) }
-        if let message = content.loginMessage {
-            let notice = PanelButton(partName: "loginStatus", title: message, isLink: true)
-            notice.toolTip = message
-            notice.onPress = { [weak self] in self?.actions.openLoginSettings() }
-            add(notice, x: gap, width: width - gap * 2, height: rowHeight)
-            y += rowHeight
-        }
-        // Ignored apps.
-        text("Ignored apps", x: rowInset, width: labelWidth, color: .secondaryLabelColor)
-        var listedAny = false
-        for identifier in settings.ignoredApps {
-            let name = content.appNames[identifier] ?? identifier
-            let checkbox = PanelCheckbox(partName: "ignored:\(identifier)", title: name, isOn: true)
-            checkbox.toolTip = identifier
-            checkbox.onChange = { [weak self] on in
-                self?.actions.update { settings in
-                    if on {
-                        if !settings.ignoredApps.contains(identifier) { settings.ignoredApps.append(identifier) }
-                    } else {
-                        settings.ignoredApps.removeAll { $0 == identifier }
-                    }
+
+        if page == .main {
+            let header = SettingsPanelHeaderView(frame: NSRect(x: 0, y: 0, width: width, height: 64))
+            let icon = NSImageView(frame: NSRect(x: gap, y: 8, width: 24, height: 26))
+            icon.image = ClipboardIcon.image(size: NSSize(width: 24, height: 26), accessibilityDescription: "Clipboard")
+            icon.imageScaling = .scaleAxesIndependently
+            icon.contentTintColor = .labelColor
+            icon.setAccessibilityLabel("Clipboard")
+            header.addSubview(icon)
+            let title = NSTextField(labelWithString: "Simple Clipboard History")
+            title.font = .systemFont(ofSize: 16, weight: .bold)
+            let titleWidth = width - (gap + 32) - 68 - gap
+            title.frame = NSRect(x: gap + 32, y: 8, width: titleWidth, height: 24)
+            title.setAccessibilityIdentifier("panelTitle")
+            title.setAccessibilityLabel("Simple Clipboard History")
+            header.addSubview(title)
+            let chart = CopyActivityChartView(days: 5, now: content.now, buckets: content.copyActivity)
+            chart.frame = NSRect(x: width - 68, y: 9, width: 54, height: 17)
+            chart.setAccessibilityLabel("Copy activity over the last 5 days, in 20-hour groups")
+            header.addSubview(chart)
+            activityChart = chart
+            let stats = content.statistics
+            let state = settings.capturePaused ? "Paused" : "Active"
+            let count = stats.map { Self.headerCount($0.clipCount) } ?? "Unavailable"
+            let percent = stats.map { min(100, Int(Double($0.clipBytes) * 100 / (Double(settings.maximumHistoryMegabytes) * 1_048_576))) } ?? 0
+            let bytes = stats.map { "\(Format.bytes($0.clipBytes)) / \(settings.maximumHistoryMegabytes) MB (\(percent)%)" } ?? "Unavailable"
+            let countLabel = stats == nil ? "Unavailable items" : "\(count) items"
+            let groups = [(state, gap + 18, 68.0), (countLabel, 107.0, 96.0), (bytes, 215.0, 167.0)]
+            for (index, group) in groups.enumerated() {
+                let label = NSTextField(labelWithString: group.0)
+                label.font = .systemFont(ofSize: 12, weight: .semibold)
+                label.frame = NSRect(x: group.1, y: 40, width: group.2, height: 18)
+                label.setAccessibilityIdentifier("headerStat:\(index)")
+                label.setAccessibilityLabel(group.0)
+                header.addSubview(label)
+                if index == 0 {
+                    let square = NSView(frame: NSRect(x: gap, y: 45, width: 10, height: 10))
+                    square.wantsLayer = true
+                    square.layer?.backgroundColor = (settings.capturePaused ? NSColor.secondaryLabelColor : NSColor.systemGreen).cgColor
+                    square.setAccessibilityLabel(state)
+                    header.addSubview(square)
+                }
+                if index < 2 {
+                    let dividerX = index == 0 ? 100 : 207
+                    let divider = NSView(frame: NSRect(x: dividerX, y: 40, width: 1, height: 18))
+                    divider.wantsLayer = true
+                    divider.layer?.backgroundColor = NSColor.separatorColor.cgColor
+                    header.addSubview(divider)
                 }
             }
-            add(checkbox, x: valueX - 2, height: rowHeight)
-            y += rowHeight + 2
-            listedAny = true
-        }
-        if let front = content.frontmostApp, !settings.ignoredApps.contains(front.identifier) {
-            let ignore = PanelButton(partName: "ignoreFrontmost", title: "+ Ignore \(front.name)", isLink: true)
-            ignore.textColor = .secondaryLabelColor
-            ignore.onPress = { [weak self] in self?.actions.update { $0.ignoredApps.append(front.identifier) } }
-            add(ignore, x: valueX - 3, height: rowHeight)
-            y += rowHeight + 2
-            listedAny = true
-        }
-        if !listedAny {
-            text("none", x: valueX, width: width - valueX - gap, color: .secondaryLabelColor)
-            y += rowHeight + 2
-        }
-        y += gap - 2
+            container.addSubview(header)
+            y += 66
+            section("History")
+            checkbox("pause", "Keep clipboard history", !settings.capturePaused) { [weak self] on in
+                self?.actions.update { $0.capturePaused = !on }
+            }
+            if let shortcut = content.hotkeyLabel {
+                let hint = NSTextField(labelWithString: shortcut)
+                hint.font = .systemFont(ofSize: 12)
+                hint.alignment = .right
+                hint.textColor = .secondaryLabelColor
+                hint.frame = NSRect(x: width - rowInset - 72, y: y - rowHeight + 2, width: 72, height: 18)
+                hint.setAccessibilityLabel("Picker shortcut \(shortcut)")
+                hint.setAccessibilityIdentifier("pickerShortcutHint")
+                settingsBody.addSubview(hint)
+            }
+            checkbox("login", "Launch at login", content.loginEnabled) { [weak self] on in self?.actions.setLoginEnabled(on) }
+            if let message = content.loginMessage {
+                let notice = PanelButton(partName: "loginStatus", title: message, isLink: true)
+                notice.toolTip = message
+                notice.onPress = { [weak self] in self?.actions.openLoginSettings() }
+                add(notice, x: gap, width: width - gap * 2, height: rowHeight)
+                y += rowHeight
+            }
+            // Ignored apps.
+            text("Ignored apps", x: rowInset, width: labelWidth, color: .secondaryLabelColor)
+            var listedAny = false
+            for identifier in settings.ignoredApps {
+                let name = content.appNames[identifier] ?? identifier
+                let checkbox = PanelCheckbox(partName: "ignored:\(identifier)", title: name, isOn: true)
+                checkbox.toolTip = identifier
+                checkbox.onChange = { [weak self] on in
+                    self?.actions.update { settings in
+                        if on {
+                            if !settings.ignoredApps.contains(identifier) { settings.ignoredApps.append(identifier) }
+                        } else {
+                            settings.ignoredApps.removeAll { $0 == identifier }
+                        }
+                    }
+                }
+                add(checkbox, x: valueX - 2, height: rowHeight)
+                y += rowHeight + 2
+                listedAny = true
+            }
+            if let front = content.frontmostApp, !settings.ignoredApps.contains(front.identifier) {
+                let ignore = PanelButton(partName: "ignoreFrontmost", title: "+ Ignore \(front.name)", isLink: true)
+                ignore.textColor = .secondaryLabelColor
+                ignore.onPress = { [weak self] in self?.actions.update { $0.ignoredApps.append(front.identifier) } }
+                add(ignore, x: valueX - 3, height: rowHeight)
+                y += rowHeight + 2
+                listedAny = true
+            }
+            if !listedAny {
+                text("none", x: valueX, width: width - valueX - gap, color: .secondaryLabelColor)
+                y += rowHeight + 2
+            }
+            y += gap - 2
 
-        section("Paste")
-        checkbox("paste", "Paste automatically into frontmost app", settings.recallMode == .paste) { [weak self] on in
-            self?.actions.update { $0.recallMode = on ? .paste : .clipboard }
+            section("Paste")
+            checkbox("paste", "Paste automatically into frontmost app", settings.recallMode == .paste) { [weak self] on in
+                self?.actions.update { $0.recallMode = on ? .paste : .clipboard }
+            }
+            dropdown("plainText", "When pasting", ["Preserve original formatting", "Paste as plain text"], settings.alwaysPastePlainText ? 1 : 0) { [weak self] index in
+                self?.actions.update { $0.alwaysPastePlainText = index == 1 }
+            }
+            checkbox("pasteSpecial", "Show Paste Special in picker", settings.showPasteSpecial) { [weak self] on in
+                self?.actions.update { $0.showPasteSpecial = on }
+            }
+            section("Limits")
+            integerInput("keep", "Maximum items", settings.historyLimit) { [weak self] in self?.chooseHistoryLimit($0) }
+            integerChoice("largest", "Largest clip (MB)", Settings.maximumClipMegabyteChoices, settings.maximumClipMegabytes) { [weak self] value in
+                self?.actions.update { $0.maximumClipMegabytes = value }
+            }
+            integerChoice("historySize", "History size (MB)", Settings.maximumHistoryMegabyteChoices, settings.maximumHistoryMegabytes) { [weak self] value in
+                self?.actions.update { $0.maximumHistoryMegabytes = value }
+            }
+            section("Look and feel")
+            dropdown("pickerWidth", "Width", ["Narrow (360 pt)", "Standard (460 pt)", "Wide (560 pt)"], Settings.pickerWidthChoices.firstIndex(of: settings.pickerWidth)) { [weak self] index in
+                self?.actions.update { $0.pickerWidth = Settings.pickerWidthChoices[index] }
+            }
+            integerChoice("contentLines", "Content lines per item", Settings.pickerContentLineChoices, settings.pickerContentLines) { [weak self] value in
+                self?.actions.update { $0.pickerContentLines = value }
+            }
+            dropdown("density", "Density", Settings.pickerDensityLabels, Settings.pickerDensityChoices.firstIndex(of: settings.pickerDensity)) { [weak self] index in
+                self?.actions.update { $0.pickerDensity = Settings.pickerDensityChoices[index] }
+            }
+            integerChoice("visibleItems", "Maximum visible items", Settings.visibleItemChoices, settings.maximumVisibleItems) { [weak self] value in
+                self?.actions.update { $0.maximumVisibleItems = value }
+            }
+            checkbox("typeIcons", "Show type icons", settings.showTypeIcons) { [weak self] on in self?.actions.update { $0.showTypeIcons = on } }
+            checkbox("timestamps", "Show timestamps", settings.showTimestamps) { [weak self] on in self?.actions.update { $0.showTimestamps = on } }
+
+        } else {
+            y = rowInset
+            let back = PanelButton(partName: "back", title: "Main", isLink: true)
+            back.isNavigation = true
+            back.textColor = .secondaryLabelColor
+            back.setAccessibilityLabel("Return to Main")
+            back.onPress = { [weak self] in self?.navigate(to: .main) }
+            add(back, x: rowInset - 3, width: back.preferredWidth)
+            let chevron = NSImageView(frame: NSRect(x: rowInset + back.preferredWidth + 3, y: y + 7, width: 8, height: 10))
+            chevron.image = NSImage(systemSymbolName: "chevron.right", accessibilityDescription: nil)
+            chevron.contentTintColor = .tertiaryLabelColor
+            chevron.setAccessibilityIdentifier("breadcrumbSeparator")
+            container.addSubview(chevron)
+            text("Settings", x: chevron.frame.maxX + 8, width: 100, height: controlHeight,
+                 font: InterfaceStyle.controlFont, color: .secondaryLabelColor, identifier: "settingsTitle")
+            y += controlHeight + 16
+            text("Icon style", x: rowInset, width: width - rowInset * 2,
+                 font: .systemFont(ofSize: 12, weight: .semibold), identifier: "section:Icon style")
+            y += rowHeight
+            let explanation = NSTextField(wrappingLabelWithString: "Choose how content types appear in the picker.")
+            explanation.font = InterfaceStyle.smallFont
+            explanation.textColor = .secondaryLabelColor
+            let explanationWidth = width - rowInset * 2
+            let explanationHeight = ceil(explanation.sizeThatFits(NSSize(width: explanationWidth, height: .greatestFiniteMagnitude)).height)
+            explanation.frame = NSRect(x: rowInset, y: y, width: explanationWidth, height: explanationHeight)
+            explanation.setAccessibilityIdentifier("iconStyleExplanation")
+            container.addSubview(explanation)
+            y += explanationHeight + 12
+            let styles = PanelIconStyleChoices(selected: settings.iconStyle)
+            styles.onChange = { [weak self] index in
+                self?.actions.update { $0.iconStyle = ClipIconStyle.allCases[index] }
+            }
+            add(styles, x: rowInset, width: width - rowInset * 2,
+                height: CGFloat(ClipIconStyle.allCases.count) * PanelIconStyleChoices.rowHeight)
+            styles.layoutSubtreeIfNeeded()
+            y += styles.frame.height + rowInset
+            separator()
+            if let confirmation {
+                confirmationControls(confirmation, inset: rowInset)
+                y += controlHeight
+            } else {
+                let clear = PanelButton(partName: "clearHistory", title: "Clear history…", isLink: true)
+                clear.symbolName = "trash"
+                clear.isEnabled = (content.statistics?.clipCount ?? 0) > 0
+                clear.onPress = { [weak self] in
+                    guard let self, let count = self.content?.statistics?.clipCount, count > 0 else { return }
+                    self.ask(.clearHistory(clipCount: count))
+                }
+                add(clear, x: rowInset)
+                y += controlHeight
+            }
+            y += rowInset
         }
-        dropdown("plainText", "When pasting", ["Preserve original formatting", "Paste as plain text"], settings.alwaysPastePlainText ? 1 : 0) { [weak self] index in
-            self?.actions.update { $0.alwaysPastePlainText = index == 1 }
-        }
-        checkbox("pasteSpecial", "Show Paste Special in picker", settings.showPasteSpecial) { [weak self] on in
-            self?.actions.update { $0.showPasteSpecial = on }
-        }
-        section("Limits")
-        integerInput("keep", "Maximum items", settings.historyLimit) { [weak self] in self?.chooseHistoryLimit($0) }
-        integerChoice("largest", "Largest clip (MB)", Settings.maximumClipMegabyteChoices, settings.maximumClipMegabytes) { [weak self] value in
-            self?.actions.update { $0.maximumClipMegabytes = value }
-        }
-        integerChoice("historySize", "History size (MB)", Settings.maximumHistoryMegabyteChoices, settings.maximumHistoryMegabytes) { [weak self] value in
-            self?.actions.update { $0.maximumHistoryMegabytes = value }
-        }
-        section("Look and feel")
-        dropdown("pickerWidth", "Width", ["Narrow (360 pt)", "Standard (460 pt)", "Wide (560 pt)"], Settings.pickerWidthChoices.firstIndex(of: settings.pickerWidth)) { [weak self] index in
-            self?.actions.update { $0.pickerWidth = Settings.pickerWidthChoices[index] }
-        }
-        integerChoice("contentLines", "Content lines per item", Settings.pickerContentLineChoices, settings.pickerContentLines) { [weak self] value in
-            self?.actions.update { $0.pickerContentLines = value }
-        }
-        dropdown("density", "Density", ["Compact", "Normal", "Comfortable"], Settings.pickerDensityChoices.firstIndex(of: settings.pickerDensity)) { [weak self] index in
-            self?.actions.update { $0.pickerDensity = Settings.pickerDensityChoices[index] }
-        }
-        integerChoice("visibleItems", "Maximum visible items", Settings.visibleItemChoices, settings.maximumVisibleItems) { [weak self] value in
-            self?.actions.update { $0.maximumVisibleItems = value }
-        }
-        checkbox("typeIcons", "Show type icons", settings.showTypeIcons) { [weak self] on in self?.actions.update { $0.showTypeIcons = on } }
-        checkbox("timestamps", "Show timestamps", settings.showTimestamps) { [weak self] on in self?.actions.update { $0.showTimestamps = on } }
 
         // Notices.
-        if !content.notices.isEmpty {
+        if page == .main && !content.notices.isEmpty {
             separator()
             for notice in content.notices {
                 let button = PanelButton(partName: "notice", title: notice.title, isLink: true)
@@ -371,69 +475,54 @@ final class SettingsPanelView: NSView {
         bodyHeight = y
         container = footer
         y = 0
-        separator()
-        if let confirmation {
-            let question: String
-            switch confirmation {
-            case .clearHistory(let clipCount): question = "Delete all \(clipCount.formatted()) clips?"
-            case .keepHistory(let limit, let deleting):
-                question = "Keep \(limit.formatted()): delete the \(deleting.formatted()) oldest clips?"
+        if page == .main {
+            separator()
+            if let confirmation {
+                confirmationControls(confirmation, inset: gap)
+            } else {
+                let actionY = y
+                func footerAction(_ name: String, _ title: String, _ symbol: String, x: CGFloat, width: CGFloat,
+                                  enabled: Bool = true, action: (() -> Void)? = nil) -> PanelButton {
+                    let button = PanelButton(partName: name, title: title, isLink: true)
+                    button.symbolName = symbol
+                    button.isEnabled = enabled
+                    button.onPress = action
+                    add(button, x: x, width: width)
+                    return button
+                }
+                let export = footerAction("export", "Export", "square.and.arrow.up", x: 104, width: 84, enabled: false)
+                export.toolTip = "Export: Not implemented"
+                export.setAccessibilityLabel("Export, Not implemented")
+                footer.separators.append(NSRect(x: 194, y: actionY + 3, width: 1, height: 18))
+                let importAction = footerAction("import", "Import", "square.and.arrow.down", x: 202, width: 78, enabled: false)
+                importAction.toolTip = "Import: Not implemented"
+                importAction.setAccessibilityLabel("Import, Not implemented")
+                if page == .main {
+                    footer.separators.append(NSRect(x: 290, y: actionY + 3, width: 1, height: 18))
+                    let settingsNavigation = footerAction("settings", "Settings", "gearshape", x: 298, width: 82) { [weak self] in
+                        self?.navigate(to: .settings)
+                    }
+                    settingsNavigation.isNavigation = true
+                }
+                y += controlHeight
+                let unavailableFont = NSFont.systemFont(ofSize: 9)
+                text("Not implemented", x: 100, width: 90, height: 16, font: unavailableFont,
+                     color: .secondaryLabelColor, alignment: .center)
+                text("Not implemented", x: 198, width: 88, height: 16, font: unavailableFont,
+                     color: .secondaryLabelColor, alignment: .center)
+                y += 16 + gap
+                let pickerTitle = "Open Picker" + (content.hotkeyLabel.map { "  \($0)" } ?? "")
+                let open = PanelButton(partName: "openPicker", title: pickerTitle, isLink: true)
+                open.symbolName = "list.clipboard"
+                open.onPress = { [weak self] in self?.actions.openPicker() }
+                add(open, x: gap)
+                let quit = PanelButton(partName: "quit", title: "Quit", isLink: true)
+                quit.symbolName = "power"
+                quit.onPress = { [weak self] in self?.actions.quit() }
+                add(quit, x: width - gap - quit.preferredWidth)
             }
-            let delete = PanelButton(partName: "confirmDelete", title: "Delete")
-            delete.isDefault = true
-            delete.onPress = { [weak self] in self?.confirm() }
-            let cancel = PanelButton(partName: "confirmCancel", title: "Cancel")
-            cancel.onPress = { [weak self] in self?.cancelConfirmation() }
-            let deleteX = width - gap - delete.preferredWidth
-            let cancelX = deleteX - gap - cancel.preferredWidth
-            text(question, x: gap, width: width - gap * 2, height: controlHeight)
-            y += controlHeight
-            add(cancel, x: cancelX)
-            add(delete, x: deleteX)
-        } else {
-            let actionY = y
-            func footerAction(_ name: String, _ title: String, _ symbol: String, x: CGFloat, width: CGFloat,
-                              enabled: Bool = true, action: (() -> Void)? = nil) -> PanelButton {
-                let button = PanelButton(partName: name, title: title, isLink: true)
-                button.symbolName = symbol
-                button.isEnabled = enabled
-                button.onPress = action
-                add(button, x: x, width: width)
-                return button
-            }
-            _ = footerAction("clearHistory", "Clear", "trash", x: gap, width: 78, enabled: (content.statistics?.clipCount ?? 0) > 0) { [weak self] in
-                guard let self, let count = self.content?.statistics?.clipCount, count > 0 else { return }
-                self.ask(.clearHistory(clipCount: count))
-            }
-            footer.separators.append(NSRect(x: 96, y: actionY + 3, width: 1, height: 18))
-            let export = footerAction("export", "Export", "square.and.arrow.up", x: 104, width: 84, enabled: false)
-            export.toolTip = "Export: Not implemented"
-            export.setAccessibilityLabel("Export, Not implemented")
-            footer.separators.append(NSRect(x: 194, y: actionY + 3, width: 1, height: 18))
-            let importAction = footerAction("import", "Import", "square.and.arrow.down", x: 202, width: 78, enabled: false)
-            importAction.toolTip = "Import: Not implemented"
-            importAction.setAccessibilityLabel("Import, Not implemented")
-            footer.separators.append(NSRect(x: 290, y: actionY + 3, width: 1, height: 18))
-            _ = footerAction("settings", "Settings", "gearshape", x: 298, width: 82, enabled: false)
-            y += controlHeight
-            let unavailableFont = NSFont.systemFont(ofSize: 9)
-            text("Not implemented", x: 104, width: 84, height: 16, font: unavailableFont,
-                 color: .secondaryLabelColor, alignment: .center)
-            text("Not implemented", x: 202, width: 78, height: 16, font: unavailableFont,
-                 color: .secondaryLabelColor, alignment: .center)
-            y += 16 + gap
-            let pickerTitle = "Open Picker" + (content.hotkeyLabel.map { "  \($0)" } ?? "")
-            let open = PanelButton(partName: "openPicker", title: pickerTitle, isLink: true)
-            open.symbolName = "list.clipboard"
-            open.onPress = { [weak self] in self?.actions.openPicker() }
-            add(open, x: gap)
-            let quit = PanelButton(partName: "quit", title: "Quit", isLink: true)
-            quit.symbolName = "power"
-            quit.onPress = { [weak self] in self?.actions.quit() }
-            add(quit, x: width - gap - quit.preferredWidth)
+            y += controlHeight + gap
         }
-        y += controlHeight + gap
-
         if confirmation != nil {
             controls.filter { !$0.partName.hasPrefix("confirm") }.forEach { $0.isEnabled = false }
         }
@@ -443,9 +532,11 @@ final class SettingsPanelView: NSView {
         layoutContents()
         focused = focusedName.flatMap { name in controls.first { $0.partName == name } }
         if confirmation != nil && (focused == nil || !(focused?.partName.hasPrefix("confirm") ?? false)) {
-            focused = control(named: "confirmDelete")
+            if case .clearHistory? = confirmation { focused = control(named: "confirmCancel") }
+            else { focused = control(named: "confirmDelete") }
         }
-        focused?.isFocused = true
+        focused?.isFocused = confirmation != nil || showFocus
+        if let focusedStyleIndex, let styles = focused as? PanelIconStyleChoices { styles.focusRow(focusedStyleIndex) }
         if window?.isKeyWindow == true { window?.makeFirstResponder(self) }
         if preferredHeight != oldPreferredHeight { onPreferredSizeChange?() }
         revealFocus()
@@ -470,7 +561,8 @@ final class SettingsPanelView: NSView {
 
     private func revealFocus() {
         guard let focused, focused.isDescendant(of: settingsBody) else { return }
-        focused.scrollToVisible(focused.bounds.insetBy(dx: 0, dy: -4))
+        if let styles = focused as? PanelIconStyleChoices { styles.revealFocusedRow() }
+        else { focused.scrollToVisible(focused.bounds.insetBy(dx: 0, dy: -4)) }
     }
 
     /// The menu choices plus the current value when it is not one of them, in order.
@@ -500,7 +592,9 @@ final class SettingsPanelView: NSView {
         self.confirmation = nil
         focused = nil
         switch confirmation {
-        case .clearHistory: actions.clearHistory()
+        case .clearHistory:
+            guard (content?.statistics?.clipCount ?? 0) > 0 else { rebuild(); return }
+            actions.clearHistory()
         case .keepHistory(let limit, _): actions.keepHistory(limit)
         }
         rebuild()
@@ -522,10 +616,10 @@ final class SettingsPanelView: NSView {
 
     // MARK: focus and keys
 
-    private func setFocus(_ control: PanelControl?) {
+    private func setFocus(_ control: PanelControl?, showFocus: Bool = true) {
         focused?.isFocused = false
         focused = control
-        control?.isFocused = true
+        control?.isFocused = showFocus
         revealFocus()
         if let integerField = control as? PanelIntegerField {
             window?.makeFirstResponder(integerField.field)
@@ -547,7 +641,7 @@ final class SettingsPanelView: NSView {
     override func keyDown(with event: NSEvent) {
         switch event.keyCode {
         case 53:
-            if confirmation != nil { cancelConfirmation() } else { actions.close() }
+            if confirmation != nil { cancelConfirmation() } else if page == .settings { navigate(to: .main) } else { actions.close() }
             return
         case 48:
             moveFocus(by: event.modifierFlags.contains(.shift) ? -1 : 1)
@@ -556,7 +650,7 @@ final class SettingsPanelView: NSView {
             break
         }
         if let focused, focused.handleKey(event) { return }
-        if confirmation != nil, event.keyCode == 36 || event.keyCode == 76 { confirm(); return }
+        if case .keepHistory? = confirmation, event.keyCode == 36 || event.keyCode == 76 { confirm(); return }
         super.keyDown(with: event)
     }
 

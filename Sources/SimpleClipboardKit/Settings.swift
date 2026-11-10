@@ -27,6 +27,7 @@ struct Settings: Equatable {
     var pickerContentLines = 2
     var pickerDensity = 4
     var maximumVisibleItems = 8
+    var iconStyle: ClipIconStyle = .current
     var showTypeIcons = true
     var showTimestamps = false
     var showPasteSpecial = true
@@ -65,6 +66,7 @@ struct Settings: Equatable {
     static let pickerWidthChoices = [360, 460, 560]
     static let pickerContentLineChoices = [1, 2, 3, 5]
     static let pickerDensityChoices = [4, 7, 10]
+    static let pickerDensityLabels = ["Compact", "Normal", "Comfortable"]
     static let visibleItemChoices = [5, 8, 10, 15]
     static let maximumHistoryMegabyteChoices = [100, 250, 500, 1000]
 }
@@ -83,6 +85,7 @@ final class SettingsStore {
         static let pickerContentLines = "pickerContentLines"
         static let pickerDensity = "pickerDensity"
         static let maximumVisibleItems = "maximumVisibleItems"
+        static let iconStyle = "iconStyle"
         static let showTypeIcons = "showTypeIcons"
         static let showTimestamps = "showTimestamps"
         static let showPasteSpecial = "showPasteSpecial"
@@ -121,6 +124,7 @@ final class SettingsStore {
         if let value = integer(defaults, Key.maximumVisibleItems) { settings.maximumVisibleItems = value }
         if let value = integer(defaults, Key.maximumHistoryMegabytes) { settings.maximumHistoryMegabytes = value }
         if let value = integer(defaults, Key.copyActivityDays) { settings.copyActivityDays = value }
+        if let value = defaults.string(forKey: Key.iconStyle), let style = ClipIconStyle(rawValue: value) { settings.iconStyle = style }
         if let value = boolean(defaults, Key.showTypeIcons) { settings.showTypeIcons = value }
         if let value = boolean(defaults, Key.showTimestamps) { settings.showTimestamps = value }
         if let value = boolean(defaults, Key.showPasteSpecial) { settings.showPasteSpecial = value }
@@ -157,6 +161,7 @@ final class SettingsStore {
         defaults.set(updated.pickerContentLines, forKey: Key.pickerContentLines)
         defaults.set(updated.pickerDensity, forKey: Key.pickerDensity)
         defaults.set(updated.maximumVisibleItems, forKey: Key.maximumVisibleItems)
+        defaults.set(updated.iconStyle.rawValue, forKey: Key.iconStyle)
         defaults.set(updated.showTypeIcons, forKey: Key.showTypeIcons)
         defaults.set(updated.showTimestamps, forKey: Key.showTimestamps)
         defaults.set(updated.showPasteSpecial, forKey: Key.showPasteSpecial)

@@ -7,7 +7,8 @@ let harnesses: [(name: String, path: String, exclude: [String])] = [
     ("StoreTests", "tools/store-tests", []),
     ("PickerTests", "tools/picker-tests", []),
     ("FilterTests", "tools/filter-tests", []),
-    ("PanelTests", "tools/panel-tests", [])
+    ("PanelTests", "tools/panel-tests", []),
+    ("IconTests", "tools/icon-tests", [])
 ]
 
 let package = Package(

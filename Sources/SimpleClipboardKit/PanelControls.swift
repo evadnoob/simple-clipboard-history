@@ -94,6 +94,8 @@ final class PanelButton: PanelControl {
     var title: String { didSet { needsDisplay = true } }
     var isLink: Bool
     var symbolName: String?
+    /// In-panel navigation stays borderless, with a system-colored underline for keyboard focus.
+    var isNavigation = false
     /// The button Return presses in a confirmation, drawn with a filled background.
     var isDefault = false { didSet { needsDisplay = true } }
     var textColor: NSColor = .labelColor
@@ -113,20 +115,48 @@ final class PanelButton: PanelControl {
         InterfaceStyle.width(of: title, font: InterfaceStyle.controlFont) + (isLink ? 6 : InterfaceStyle.gap * 3) + (symbolName == nil ? 0 : 18)
     }
 
+    private var labelRect: NSRect {
+        var rect = isLink || isNavigation ? bounds.insetBy(dx: 3, dy: 0) : bounds
+        if symbolName != nil { rect.origin.x += 18; rect.size.width -= 18 }
+        return rect
+    }
+
+    /// Follows the rendered label, not the chevron or the larger mouse target.
+    var navigationUnderlineRect: NSRect {
+        let rect = labelRect
+        let height = ceil(InterfaceStyle.controlFont.ascender - InterfaceStyle.controlFont.descender)
+        return NSRect(x: rect.minX, y: rect.minY + floor((rect.height - height) / 2) + height,
+                      width: max(0, min(rect.width, InterfaceStyle.width(of: title, font: InterfaceStyle.controlFont))), height: 2)
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         let color: NSColor = !isEnabled ? .disabledControlTextColor : isDefault ? .alternateSelectedControlTextColor : textColor
-        if !isLink {
+        if !isLink && !isNavigation {
             if isDefault { InterfaceStyle.selectionFill(bounds) }
             InterfaceStyle.strokeBorder(bounds, color: .separatorColor)
         }
-        var textRect = isLink ? bounds.insetBy(dx: 3, dy: 0) : bounds
+        let textRect = labelRect
         if let symbolName {
-            InterfaceStyle.drawSymbol(symbolName, in: NSRect(x: textRect.minX, y: bounds.midY - 6, width: 12, height: 12), color: color)
-            textRect.origin.x += 18
-            textRect.size.width -= 18
+            InterfaceStyle.drawSymbol(symbolName, in: NSRect(x: textRect.minX - 18, y: bounds.midY - 6, width: 12, height: 12), color: color)
         }
-        InterfaceStyle.draw(title, in: textRect, font: InterfaceStyle.controlFont, color: color, alignment: isLink ? .left : .center)
-        if isFocused { InterfaceStyle.strokeFocus(bounds) }
+        InterfaceStyle.draw(title, in: textRect, font: InterfaceStyle.controlFont, color: color, alignment: isLink || isNavigation ? .left : .center)
+        if isFocused {
+            if isNavigation {
+                NSColor.keyboardFocusIndicatorColor.setFill()
+                navigationUnderlineRect.fill()
+            } else {
+                InterfaceStyle.strokeFocus(bounds)
+            }
+        }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard isNavigation else { super.mouseDown(with: event); return }
+        guard isEnabled else { return }
+        onFocusRequest?(self)
+        // Keep the navigation target in the tab order without drawing keyboard focus for a click.
+        isFocused = false
+        click(at: convert(event.locationInWindow, from: nil))
     }
 
     override func accessibilityPerformPress() -> Bool { guard isEnabled else { return false }; onFocusRequest?(self); press(); return true }
