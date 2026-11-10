@@ -24,9 +24,9 @@ Click the clipboard icon in the menu bar. The icon stays icon-only; history coun
 
 ![Clipboard control panel](docs/screenshots/control-panel.png)
 
-The main view retains history statistics, recent copy activity, all existing settings and primary actions except Clear history, which lives in Settings. Click **Settings** for the new **Icon style** selector inside the same panel. The **Main** breadcrumb or Escape returns to the main view.
+The main view shows history statistics, recent copy activity, and capture, paste, limit and picker controls. Its single footer row contains **Settings**, **Open Picker** (with the current shortcut), and **Quit**, separated by thin dividers. Click **Settings** for **Ignored apps** at the top, followed by the **Icon style** selector inside the same panel. The **Main** breadcrumb or Escape returns to the main view.
 
-- **History:** keep clipboard history, launch at login and ignored apps. The picker shortcut stays visible on the main view.
+- **History:** keep clipboard history and launch at login. The picker shortcut stays visible on the main view.
 - **Paste:** automatic paste or clipboard-only recall, formatting or plain text, and Paste Special.
 - **Limits:** item count, total stored content size, and maximum size of one copy.
 - **Look and feel:** width, actual content lines, density, maximum visible items, type icons, and timestamps.
@@ -35,7 +35,7 @@ The main view retains history statistics, recent copy activity, all existing set
 
 New families distinguish plain text, recorded rich-text/HTML representations, bounded first-line web links, images without thumbnails, and single or multiple stored files. Unknown types use a neutral fallback. The artwork vocabulary also includes folder, code, terminal, structured data, email, color, explicitly sensitive and mixed content symbols, but those remain renderer-only until reliable explicit metadata exists. No code, command or password heuristics are used, and the sensitive symbol does not imply protection.
 
-Settings apply immediately and persist across launches. **Clear history…** is in a separate section below the icon styles in **Settings**, not on Main. It asks for confirmation with Cancel focused by default; choose **Clear history** explicitly to permanently delete all history. **Import and Export are visible but not implemented.**
+Settings apply immediately and persist across launches. **Clear history…** is in a separate section below the icon styles in **Settings**, not on Main. It asks for confirmation with Cancel focused by default; choose **Clear history** explicitly to permanently delete all history. Import and Export are not shown.
 
 Screenshots use synthetic clipboard content rendered by the app's test harnesses.
 

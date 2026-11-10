@@ -337,40 +337,6 @@ final class SettingsPanelView: NSView {
                 add(notice, x: gap, width: width - gap * 2, height: rowHeight)
                 y += rowHeight
             }
-            // Ignored apps.
-            text("Ignored apps", x: rowInset, width: labelWidth, color: .secondaryLabelColor)
-            var listedAny = false
-            for identifier in settings.ignoredApps {
-                let name = content.appNames[identifier] ?? identifier
-                let checkbox = PanelCheckbox(partName: "ignored:\(identifier)", title: name, isOn: true)
-                checkbox.toolTip = identifier
-                checkbox.onChange = { [weak self] on in
-                    self?.actions.update { settings in
-                        if on {
-                            if !settings.ignoredApps.contains(identifier) { settings.ignoredApps.append(identifier) }
-                        } else {
-                            settings.ignoredApps.removeAll { $0 == identifier }
-                        }
-                    }
-                }
-                add(checkbox, x: valueX - 2, height: rowHeight)
-                y += rowHeight + 2
-                listedAny = true
-            }
-            if let front = content.frontmostApp, !settings.ignoredApps.contains(front.identifier) {
-                let ignore = PanelButton(partName: "ignoreFrontmost", title: "+ Ignore \(front.name)", isLink: true)
-                ignore.textColor = .secondaryLabelColor
-                ignore.onPress = { [weak self] in self?.actions.update { $0.ignoredApps.append(front.identifier) } }
-                add(ignore, x: valueX - 3, height: rowHeight)
-                y += rowHeight + 2
-                listedAny = true
-            }
-            if !listedAny {
-                text("none", x: valueX, width: width - valueX - gap, color: .secondaryLabelColor)
-                y += rowHeight + 2
-            }
-            y += gap - 2
-
             section("Paste")
             checkbox("paste", "Paste automatically into frontmost app", settings.recallMode == .paste) { [weak self] on in
                 self?.actions.update { $0.recallMode = on ? .paste : .clipboard }
@@ -421,6 +387,40 @@ final class SettingsPanelView: NSView {
             text("Settings", x: chevron.frame.maxX + 8, width: 100, height: controlHeight,
                  font: InterfaceStyle.controlFont, color: .secondaryLabelColor, identifier: "settingsTitle")
             y += controlHeight + 16
+            // Ignored apps.
+            text("Ignored apps", x: rowInset, width: labelWidth, color: .secondaryLabelColor)
+            var listedAny = false
+            for identifier in settings.ignoredApps {
+                let name = content.appNames[identifier] ?? identifier
+                let checkbox = PanelCheckbox(partName: "ignored:\(identifier)", title: name, isOn: true)
+                checkbox.toolTip = identifier
+                checkbox.onChange = { [weak self] on in
+                    self?.actions.update { settings in
+                        if on {
+                            if !settings.ignoredApps.contains(identifier) { settings.ignoredApps.append(identifier) }
+                        } else {
+                            settings.ignoredApps.removeAll { $0 == identifier }
+                        }
+                    }
+                }
+                add(checkbox, x: valueX - 2, height: rowHeight)
+                y += rowHeight + 2
+                listedAny = true
+            }
+            if let front = content.frontmostApp, !settings.ignoredApps.contains(front.identifier) {
+                let ignore = PanelButton(partName: "ignoreFrontmost", title: "+ Ignore \(front.name)", isLink: true)
+                ignore.textColor = .secondaryLabelColor
+                ignore.onPress = { [weak self] in self?.actions.update { $0.ignoredApps.append(front.identifier) } }
+                add(ignore, x: valueX - 3, height: rowHeight)
+                y += rowHeight + 2
+                listedAny = true
+            }
+            if !listedAny {
+                text("none", x: valueX, width: width - valueX - gap, color: .secondaryLabelColor)
+                y += rowHeight + 2
+            }
+            y += gap - 2
+
             text("Icon style", x: rowInset, width: width - rowInset * 2,
                  font: .systemFont(ofSize: 12, weight: .semibold), identifier: "section:Icon style")
             y += rowHeight
@@ -480,46 +480,30 @@ final class SettingsPanelView: NSView {
             if let confirmation {
                 confirmationControls(confirmation, inset: gap)
             } else {
-                let actionY = y
-                func footerAction(_ name: String, _ title: String, _ symbol: String, x: CGFloat, width: CGFloat,
-                                  enabled: Bool = true, action: (() -> Void)? = nil) -> PanelButton {
-                    let button = PanelButton(partName: name, title: title, isLink: true)
-                    button.symbolName = symbol
-                    button.isEnabled = enabled
-                    button.onPress = action
-                    add(button, x: x, width: width)
-                    return button
-                }
-                let export = footerAction("export", "Export", "square.and.arrow.up", x: 104, width: 84, enabled: false)
-                export.toolTip = "Export: Not implemented"
-                export.setAccessibilityLabel("Export, Not implemented")
-                footer.separators.append(NSRect(x: 194, y: actionY + 3, width: 1, height: 18))
-                let importAction = footerAction("import", "Import", "square.and.arrow.down", x: 202, width: 78, enabled: false)
-                importAction.toolTip = "Import: Not implemented"
-                importAction.setAccessibilityLabel("Import, Not implemented")
-                if page == .main {
-                    footer.separators.append(NSRect(x: 290, y: actionY + 3, width: 1, height: 18))
-                    let settingsNavigation = footerAction("settings", "Settings", "gearshape", x: 298, width: 82) { [weak self] in
-                        self?.navigate(to: .settings)
-                    }
-                    settingsNavigation.isNavigation = true
-                }
-                y += controlHeight
-                let unavailableFont = NSFont.systemFont(ofSize: 9)
-                text("Not implemented", x: 100, width: 90, height: 16, font: unavailableFont,
-                     color: .secondaryLabelColor, alignment: .center)
-                text("Not implemented", x: 198, width: 88, height: 16, font: unavailableFont,
-                     color: .secondaryLabelColor, alignment: .center)
-                y += 16 + gap
+                let settingsNavigation = PanelButton(partName: "settings", title: "Settings", isLink: true)
+                settingsNavigation.symbolName = "gearshape"
+                settingsNavigation.isNavigation = true
+                settingsNavigation.onPress = { [weak self] in self?.navigate(to: .settings) }
                 let pickerTitle = "Open Picker" + (content.hotkeyLabel.map { "  \($0)" } ?? "")
                 let open = PanelButton(partName: "openPicker", title: pickerTitle, isLink: true)
                 open.symbolName = "list.clipboard"
                 open.onPress = { [weak self] in self?.actions.openPicker() }
-                add(open, x: gap)
                 let quit = PanelButton(partName: "quit", title: "Quit", isLink: true)
                 quit.symbolName = "power"
                 quit.onPress = { [weak self] in self?.actions.quit() }
-                add(quit, x: width - gap - quit.preferredWidth)
+                let buttons = [settingsNavigation, open, quit]
+                let dividerGap: CGFloat = 10
+                let totalWidth = buttons.reduce(CGFloat(0)) { $0 + $1.preferredWidth } + dividerGap * 4 + 2
+                var x = (width - totalWidth) / 2
+                for (index, button) in buttons.enumerated() {
+                    add(button, x: x, width: button.preferredWidth)
+                    x += button.preferredWidth
+                    if index < buttons.count - 1 {
+                        x += dividerGap
+                        footer.separators.append(NSRect(x: x, y: y + 3, width: 1, height: 18))
+                        x += 1 + dividerGap
+                    }
+                }
             }
             y += controlHeight + gap
         }
