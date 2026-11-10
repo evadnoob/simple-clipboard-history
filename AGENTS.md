@@ -7,8 +7,9 @@
 - Settings live in the control panel that opens from the menu bar icon, and are stored in user defaults. Use
   checkboxes and native dropdown controls (`PanelControls.swift`). Do not add a settings file or a separate
   preferences window.
-- The menu bar stays icon-only. The control panel shows statistics and settings, not clips. Keep Import and
-  Export visible, disabled and labeled "Not implemented" until those actions exist.
+- The menu bar stays icon-only. The control panel shows statistics and settings, not clips. Its Main footer contains
+  Settings, Open Picker (with its shortcut), and Quit; do not show unimplemented Import or Export actions.
+  Ignored apps belongs at the top of Settings, above Icon style.
 - The picker has no title row and no input field. Typing narrows the list; show the query and optional match
   count only while the query is nonempty. Keep keyboard hints compact and accurate.
 - The picker is a nonactivating `NSPanel`, so the user's app stays active and receives the paste. Do not activate

@@ -54,9 +54,9 @@ func render() -> NSBitmapImageRep {
 
 // MARK: original main page
 check(view.page == .main, "opening starts on main")
-check(view.controls.map(\.partName) == ["pause", "login", "ignoreFrontmost", "paste", "plainText", "pasteSpecial", "keep", "largest", "historySize", "pickerWidth", "contentLines", "density", "visibleItems", "typeIcons", "timestamps", "export", "import", "settings", "openPicker", "quit"],
-      "Main retains every non-Clear setting and footer action in original order")
-check(view.preferredHeight == 597, "Main retains original content-driven layout")
+check(view.controls.map(\.partName) == ["pause", "login", "paste", "plainText", "pasteSpecial", "keep", "largest", "historySize", "pickerWidth", "contentLines", "density", "visibleItems", "typeIcons", "timestamps", "settings", "openPicker", "quit"],
+      "Main retains capture, paste, limits and picker controls, followed by the three footer actions")
+check(view.preferredHeight == 519, "Main shrinks by the removed ignored-app row and extra footer row")
 check(view.control(named: "iconStyle") == nil && view.control(named: "paste") != nil && view.control(named: "pickerWidth") != nil, "only new icon style is absent from Main")
 check(button("settings")?.isEnabled == true, "Settings enabled")
 check(checkbox("pause")?.accessibilityLabel() == "Keep clipboard history", "main history toggle accessible")
@@ -393,11 +393,11 @@ view.resetInteraction()
 view.show(content())
 button("settings")?.press()
 check(view.page == .settings && view.focusedPart == "back", "Settings opens in place with Back as the next keyboard navigation anchor")
-check(view.preferredHeight < mainPreferredHeight, "settings uses content-driven preferred size")
+check(view.preferredHeight == 509, "settings uses content-driven preferred size")
 check(view.control(named: "pause") == nil && view.activityChart == nil, "main-only content hidden in settings")
 check(button("back")?.accessibilityLabel() == "Return to Main" && button("back")?.accessibilityRole() == .button,
       "Back exposes accessible navigation action")
-check(view.controls.map(\.partName) == ["back", "iconStyle", "clearHistory"], "Settings contains breadcrumb Main, Icon style and separate Clear history")
+check(view.controls.map(\.partName) == ["back", "ignoreFrontmost", "iconStyle", "clearHistory"], "Settings contains breadcrumb Main, ignored apps, Icon style and separate Clear history")
 let document = view.scrollView.documentView as! PanelSectionView
 check(document.sectionHeaders.isEmpty, "Settings heading has no full-width section strip")
 check(iconChoices()?.titles == ClipIconStyle.allCases.map(\.title) && iconChoices()?.selectedIndex == 0,
@@ -440,14 +440,14 @@ checkbox("typeIcons")?.toggle()
 checkbox("timestamps")?.toggle()
 checkbox("pasteSpecial")?.toggle()
 check(!settings.showTypeIcons && settings.showTimestamps && !settings.showPasteSpecial, "picker toggles preserved")
+view.navigate(to: .settings)
 button("ignoreFrontmost")?.press()
 check(settings.ignoredApps == ["net.kovidgoyal.kitty"], "ignore action preserved")
 checkbox("ignored:net.kovidgoyal.kitty")?.toggle()
 check(settings.ignoredApps.isEmpty, "unignore action preserved")
+view.navigate(to: .main)
 for name in ["import", "export"] {
-    let control = button(name)!
-    check(!control.isEnabled && control.accessibilityLabel() == "\(name.capitalized), Not implemented", "unimplemented action stays labeled and disabled")
-    check(!control.accessibilityPerformPress(), "disabled action cannot activate")
+    check(button(name) == nil, "unimplemented action is removed entirely")
 }
 view.navigate(to: .settings)
 var visited: [String] = []
@@ -729,7 +729,7 @@ reductionEditor.insertText("100", replacementRange: NSRange(location: NSNotFound
 reductionField.field.textDidChange(Notification(name: NSText.didChangeNotification, object: reductionEditor))
 reductionEditor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
 check(windowView.confirmation == .keepHistory(limit: 100, deleting: 42)
-    && realPanel.frame.height == ordinaryHeight - 24, "smaller-limit confirmation fits the reserved footer layout")
+    && realPanel.frame.height == ordinaryHeight + 24, "smaller-limit confirmation fits the reserved footer layout")
 let reductionLockedField = windowView.control(named: "keep") as! PanelIntegerField
 check(!reductionLockedField.isEnabled && !reductionLockedField.field.isEnabled, "reduction confirmation disables native numeric editor")
 reductionLockedField.field.stringValue = "200"
@@ -750,7 +750,7 @@ confirmedEditor.doCommand(by: #selector(NSResponder.insertNewline(_:)))
 check(windowSettings.settings.historyLimit == 100 && realPanel.frame.height == ordinaryHeight,
       "confirm applies through temporary defaults and restores ordinary height")
 
-// A 720-point display with notices, login detail and many exclusions must scroll, not escape its screen.
+// Many exclusions overflow Settings; Main independently scrolls on a smaller display.
 visibleFrame = NSRect(x: -1280, y: -200, width: 1280, height: 696)
 anchor = NSRect(x: -30, y: 496, width: 26, height: 24)
 windowSettings.update { $0.ignoredApps = (0..<40).map { "test.ignored.\($0)" } }
@@ -758,14 +758,17 @@ synthetic.settings = windowSettings.settings
 synthetic.notices = [.needsAccessibility, .hotkeyUnavailable(.shiftCommandV)]
 synthetic.loginMessage = "Synthetic login item needs approval"
 windowController.show(synthetic)
+windowView.navigate(to: .settings)
 windowFits("overflow")
 check(windowView.preferredHeight > realPanel.frame.height && realPanel.frame.height == visibleFrame.height - 8,
       "overflow is bounded to the anchor screen's available height")
 check(windowView.scrollView.documentView!.frame.height > windowView.scrollView.contentView.bounds.height,
       "overflowing settings have a scroll document")
-check(visibleControl("openPicker") && visibleControl("quit"), "fixed footer remains visible before scrolling")
+check(windowView.control(named: "openPicker") == nil && windowView.control(named: "ignored:test.ignored.39") != nil, "overflowing exclusions belong only to Settings")
 windowView.resetInteraction()
 windowView.navigate(to: .main)
+visibleFrame.size.height = 480
+windowController.resizeToFit()
 var allFocusedControlsVisible = true
 for _ in 0..<windowView.controls.filter({ $0.isEnabled }).count {
     windowView.moveFocus(by: 1)
@@ -845,7 +848,7 @@ do {
     // MARK: layout
     check(view.frame.width == SettingsPanelView.width && view.frame.height == view.preferredHeight, "view sized to its content")
     check(view.preferredHeight > 300 && view.preferredHeight < 760, "height is reasonable (\(view.preferredHeight))")
-    check(view.controls.map(\.partName) == ["pause", "login", "ignoreFrontmost", "paste", "plainText", "pasteSpecial", "keep", "largest", "historySize", "pickerWidth", "contentLines", "density", "visibleItems", "typeIcons", "timestamps", "export", "import", "settings", "openPicker", "quit"], "panel controls follow original sections and footer actions")
+    check(view.controls.map(\.partName) == ["pause", "login", "paste", "plainText", "pasteSpecial", "keep", "largest", "historySize", "pickerWidth", "contentLines", "density", "visibleItems", "typeIcons", "timestamps", "settings", "openPicker", "quit"], "panel controls follow retained sections and the simplified footer")
     check(view.controls.allSatisfy { view.bounds.contains($0.convert($0.bounds, to: view)) }, "every control inside the panel")
     for (index, control) in view.controls.enumerated() {
         for other in view.controls[(index + 1)...] where control.convert(control.bounds, to: view).intersects(other.convert(other.bounds, to: view)) {
@@ -872,11 +875,11 @@ do {
           "long paste dropdown stays within the panel width")
     check(choices("largest")?.titles == ["5", "20", "50", "100"] && choices("largest")?.selectedIndex == 1, "largest clip choices")
     check(button("openPicker")?.title == "Open Picker  \u{21E7}\u{2318}V", "open picker shows the hotkey")
-    check(button("ignoreFrontmost")?.title == "+ Ignore kitty", "ignore the frontmost app")
+    check(button("ignoreFrontmost") == nil, "ignored apps is absent from Main")
     check(render().pixelsWide > 0, "panel draws")
     let panelDocument = view.scrollView.documentView!
     let rowLabels = panelDocument.subviews.compactMap { $0 as? NSTextField }
-    check(rowLabels.contains { $0.frame.minX == 16 && ($0.stringValue.contains("Default paste") || $0.stringValue == "Ignored apps") },
+    check(rowLabels.contains { $0.frame.minX == 16 && ($0.stringValue == "When pasting") },
           "setting labels share the 16-point content inset")
     let longLabel = choices("plainText")!
     check(longLabel.frame.width > 0 && longLabel.frame.maxX <= view.bounds.width && longLabel.popup.itemArray.count == 2,
@@ -904,7 +907,7 @@ do {
     check(checkbox("pause")?.button.controlSize == .small && checkbox("pause")?.button.font == InterfaceStyle.controlFont,
           "native checkbox typography and size are compact")
     check(button("clearHistory") == nil && button("openPicker")?.symbolName == "list.clipboard"
-          && button("import")?.symbolName == "square.and.arrow.down" && button("export")?.symbolName == "square.and.arrow.up",
+          && button("import") == nil && button("export") == nil,
           "restrained action symbols use their actual meaning")
     check(checkbox("pause")?.hitTest(NSPoint(x: checkbox("pause")!.frame.midX, y: checkbox("pause")!.frame.midY)) === checkbox("pause"),
           "native checkbox drawing leaves mouse handling with the panel control")
@@ -944,6 +947,7 @@ do {
     check(settings.historyLimit == 10_000 && view.confirmation == nil, "a larger limit applies without asking")
 
     // MARK: ignored apps
+    view.navigate(to: .settings)
     button("ignoreFrontmost")?.press()
     check(settings.ignoredApps == ["net.kovidgoyal.kitty"], "ignore adds the frontmost app")
     check(button("ignoreFrontmost") == nil && checkbox("ignored:net.kovidgoyal.kitty")?.isOn == true, "ignored app listed with a checkbox")
@@ -954,6 +958,7 @@ do {
     checkbox("ignored:net.kovidgoyal.kitty")?.toggle()
     check(settings.ignoredApps == ["com.1password.1password"], "unchecking stops ignoring")
     check(button("ignoreFrontmost") != nil, "the frontmost app can be ignored again")
+    view.navigate(to: .main)
 
     // MARK: confirmation inside the panel
     calls.removeAll()
@@ -1103,28 +1108,9 @@ do {
     check(view.statusLine.contains("unavailable"), "unknown history does not claim zero")
     view.show(content())
 
-    // MARK: disabled operations, accessibility, keyboard focus
+    // MARK: removed operations, accessibility, keyboard focus
     for name in ["import", "export"] {
-        let control = button(name)!
-        check(!control.isEnabled && control.title == name.capitalized,
-            "\(name) action is disabled")
-        if name == "import" || name == "export" {
-            check(control.toolTip == "\(name.capitalized): Not implemented"
-                  && control.accessibilityLabel() == "\(name.capitalized), Not implemented",
-                  "\(name) exposes its unavailable state in tooltip and accessibility")
-            check(InterfaceStyle.width(of: "Not implemented", font: .systemFont(ofSize: 9)) <= control.frame.width,
-                  "\(name) unavailable caption fits its footer group")
-            check(view.subviews.contains { subview in
-                subview.subviews.contains { ($0 as? NSTextField)?.stringValue == "Not implemented"
-                    && $0.frame.width >= 78 && $0.frame.height >= 16 }
-            }, "\(name) has a visible unavailable caption")
-        }
-        var invoked = false
-        control.onPress = { invoked = true }
-        control.press()
-        _ = control.handleKey(key(49, " "))
-        check(!control.accessibilityPerformPress() && !invoked, "\(name) cannot activate by mouse/key/accessibility")
-        check(control.accessibilityRole() == .button && control.isAccessibilityEnabled() == false, "\(name) accessibility disabled button")
+        check(button(name) == nil, "removed action has no control, hit target, or accessibility element")
     }
     check(checkbox("pause")?.accessibilityRole() == .checkBox, "custom checkbox accessibility role")
     check(checkbox("pause")?.accessibilityLabel() == "Keep clipboard history", "checkbox accessible label")
@@ -1353,7 +1339,7 @@ do {
     preview.navigate(to: .main)
     check(preview.preferredHeight == originalMainHeight && zip(originalMainFrames, preview.controls).allSatisfy {
         $0.0.0 == $0.1.partName && $0.0.1 == $0.1.frame
-    }, "visual settings leave every original Main frame and height unchanged")
+    }, "round-trip navigation restores every Main frame and height")
 }
 
 // MARK: stronger selected treatment remains distinct from keyboard focus.
@@ -1432,7 +1418,7 @@ do {
         var visited: [String] = []
         for _ in 0..<6 { host.keyDown(with: key(48)); visited.append(host.focusedPart) }
         check(Set(visited) == ["back", "iconStyle", "clearHistory"], "Settings Tab has no hidden Main actions")
-        for _ in 0..<6 { host.keyDown(with: key(48, "\t", .shift)); check(["back", "iconStyle", "clearHistory"].contains(host.focusedPart), "Settings reverse Tab has no hidden Main actions") }
+        for _ in 0..<6 { host.keyDown(with: key(48, "\t", .shift)); check(["back", "ignoreFrontmost", "iconStyle", "clearHistory"].contains(host.focusedPart), "Settings reverse Tab has no hidden Main actions") }
         _ = host.control(named: "back")?.accessibilityPerformPress()
         check(host.page == .main && host.preferredHeight == mainHeight && zip(mainFrames, host.controls).allSatisfy {
             $0.0.0 == $0.1.partName && $0.0.1 == $0.1.frame
@@ -1547,6 +1533,81 @@ do {
     }
 }
 
+// Production footer geometry and moved exclusion callbacks, without live services.
+do {
+    let host = SettingsPanelView()
+    var fixture = content()
+    fixture.settings.ignoredApps = ["test.ignored"]
+    fixture.appNames["test.ignored"] = "Synthetic app"
+    var updates = 0
+    var opened = 0
+    var quits = 0
+    host.actions.update = { change in
+        change(&fixture.settings)
+        updates += 1
+        host.show(fixture)
+    }
+    host.actions.openPicker = { opened += 1 }
+    host.actions.quit = { quits += 1 }
+    host.show(fixture)
+    let shortcuts = SettingsPanelView.hotkeyTitles.filter { $0.0 != .none }.map { Optional($0.1) } + [nil]
+    for shortcut in shortcuts {
+        fixture.hotkeyLabel = shortcut
+        host.show(fixture)
+        let buttons = ["settings", "openPicker", "quit"].map { host.control(named: $0) as! PanelButton }
+        let footer = buttons[0].superview as! PanelSectionView
+        check(buttons.allSatisfy { $0.superview === footer && $0.frame.midY == buttons[0].frame.midY
+              && $0.frame.width == $0.preferredWidth && footer.bounds.contains($0.frame) },
+              "all three footer actions share a row and fit full intrinsic labels at390pt")
+        check(abs(buttons[0].frame.minX - (390 - buttons[2].frame.maxX)) < 0.01,
+              "footer action group is horizontally centered")
+        let dividers = footer.separators.filter { $0.width == 1 }
+        check(dividers.count == 2, "footer has exactly two thin vertical separators")
+        for index in 0..<2 {
+            check(buttons[index].frame.maxX < dividers[index].minX
+                  && dividers[index].maxX < buttons[index + 1].frame.minX
+                  && dividers[index].midY == buttons[index].frame.midY,
+                  "divider separates nonoverlapping footer controls with centered18pt rule")
+        }
+        check(buttons[1].title == "Open Picker" + (shortcut.map { "  \($0)" } ?? ""),
+              "Open Picker preserves visible shortcut without truncation")
+        check(host.controls.allSatisfy { !$0.partName.hasPrefix("ignored:") && $0.partName != "ignoreFrontmost" },
+              "Main has no ignored-app hit, accessibility or focus entries")
+        func descendants(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + descendants($0) } }
+        let all = descendants(host)
+        check(!all.contains { element in
+            ["import", "export"].contains(element.accessibilityIdentifier() ?? "")
+                || ["Import", "Export", "Not implemented"].contains((element as? NSTextField)?.stringValue ?? "")
+                || ["Import, Not implemented", "Export, Not implemented"].contains(element.accessibilityLabel() ?? "")
+        }, "removed Import/Export leave no labels or accessibility descendants")
+        check(buttons[0].isNavigation && buttons[0].isLink,
+              "Settings keeps borderless navigation underline focus")
+        check(buttons[1].accessibilityPerformPress() && buttons[2].accessibilityPerformPress(),
+              "Open Picker and Quit invoke real accessible callbacks")
+        check(buttons[0].accessibilityPerformPress() && host.page == .settings,
+              "Settings accessible callback opens Settings")
+        check(host.controls.map(\.partName) == ["back", "ignored:test.ignored", "ignoreFrontmost", "iconStyle", "clearHistory"],
+              "Settings focus order places exclusions above Icon style")
+        host.keyDown(with: key(48))
+        check(host.focusedPart == "ignored:test.ignored", "Tab reaches first ignored app from breadcrumb")
+        host.keyDown(with: key(49, " "))
+        check(fixture.settings.ignoredApps.isEmpty, "Space unignores via production checkbox callback")
+        let candidate = host.control(named: "ignoreFrontmost") as! PanelButton
+        check(candidate.accessibilityPerformPress(), "frontmost app candidate has accessible action")
+        check(fixture.settings.ignoredApps == ["net.kovidgoyal.kitty"], "candidate invokes real settings update callback")
+        host.maximumHeight = 230
+        host.moveFocus(by: -1)
+        check(host.focusedPart == "clearHistory" && host.scrollView.documentVisibleRect.contains(host.control(named: "clearHistory")!.frame),
+              "constrained Settings keyboard navigation scrolls to bottom Clear")
+        host.navigate(to: .main)
+        check(host.preferredHeight == 519 && host.frame.height == 230,
+              "Main height is independent of moved ignored-app count, with bounded viewport")
+        fixture.settings.ignoredApps = ["test.ignored"]
+        host.maximumHeight = .greatestFiniteMagnitude
+    }
+    check(updates == shortcuts.count * 2 && opened == shortcuts.count && quits == shortcuts.count, "synthetic actions dispatch exactly once per activation")
+}
+
 // Synthetic-only publication evidence for Main and each Settings clear state.
 do {
     let host = SettingsPanelView()
@@ -1568,6 +1629,10 @@ do {
               && !host.controls.contains { $0.accessibilityLabel()?.contains("Clear") == true },
               "Main has no Clear control, hit target, confirmation or accessibility action")
         snapshot("main", appearance)
+        host.maximumHeight = 230
+        host.moveFocus(by: -1)
+        snapshot("main-constrained", appearance)
+        host.maximumHeight = .greatestFiniteMagnitude
         host.navigate(to: .settings)
         snapshot("normal", appearance)
         (host.control(named: "clearHistory") as? PanelButton)?.press()
