@@ -73,3 +73,7 @@ bash tools/run-tests.sh
 ```
 
 Tests use synthetic data. Offscreen rendering does not verify live focus, paste delivery, VoiceOver interaction, launch at login, or mouse resizing. Input methods that compose characters are not supported yet.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
