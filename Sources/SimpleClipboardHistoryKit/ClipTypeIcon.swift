@@ -3,10 +3,18 @@ import AppKit
 /// One picker-wide family. Raw values are stable user-defaults values.
 enum ClipIconStyle: String, CaseIterable {
     case current, openOutlines, compactSilhouettes, framedSymbols, editorialContentMarks
+    case fineLine, contentGlyphs, twoTone
+
+    var usesCustomArtwork: Bool {
+        [.editorialContentMarks, .fineLine, .contentGlyphs, .twoTone].contains(self)
+    }
 
     var title: String {
         switch self {
         case .current: return "Current"
+        case .fineLine: return "Fine line"
+        case .contentGlyphs: return "Content glyphs"
+        case .twoTone: return "Two-tone"
         case .editorialContentMarks: return "Editorial content marks"
         case .openOutlines: return "Open outlines"
         case .compactSilhouettes: return "Compact silhouettes"
@@ -57,8 +65,8 @@ enum ClipIconClassifier {
 enum ClipTypeIcon {
     static func symbolName(category: ClipIconCategory, style: ClipIconStyle) -> String {
         switch style {
-        case .editorialContentMarks:
-            preconditionFailure("Editorial content marks use custom artwork, not SF Symbols")
+        case .editorialContentMarks, .fineLine, .contentGlyphs, .twoTone:
+            preconditionFailure("This icon style uses custom artwork, not SF Symbols")
         case .current:
             switch category {
             case .image: return "photo"
@@ -124,9 +132,14 @@ enum ClipTypeIcon {
     }
 
     static func draw(category: ClipIconCategory, style: ClipIconStyle, in rect: NSRect, color: NSColor,
-                     colorSwatch: NSColor? = nil) {
+                     colorSwatch: NSColor? = nil, selected: Bool = false) {
         if style == .editorialContentMarks {
             drawEditorial(category: category, in: rect, color: color, colorSwatch: colorSwatch)
+            return
+        }
+        if [.fineLine, .contentGlyphs, .twoTone].contains(style) {
+            ContentMarkIcon.draw(category: category, style: style, in: rect, color: color,
+                                 colorSwatch: colorSwatch, selected: selected)
             return
         }
         var symbolRect = rect

@@ -196,7 +196,7 @@ final class PickerView: NSView {
                     InterfaceStyle.drawSymbol(Self.symbolName(for: clip), in: symbolRect, color: foreground)
                 } else {
                     ClipTypeIcon.draw(category: ClipIconClassifier.category(for: clip), style: settings.iconStyle,
-                                      in: symbolRect, color: foreground)
+                                      in: symbolRect, color: foreground, selected: selected)
                 }
                 textX += symbolRect.width + 10
             }

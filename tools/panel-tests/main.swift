@@ -393,7 +393,8 @@ view.resetInteraction()
 view.show(content())
 button("settings")?.press()
 check(view.page == .settings && view.focusedPart == "back", "Settings opens in place with Back as the next keyboard navigation anchor")
-check(view.preferredHeight == 509, "settings uses content-driven preferred size")
+check(view.preferredHeight == 199 + CGFloat(ClipIconStyle.allCases.count) * 62,
+      "settings uses content-driven preferred size")
 check(view.control(named: "pause") == nil && view.activityChart == nil, "main-only content hidden in settings")
 check(button("back")?.accessibilityLabel() == "Return to Main" && button("back")?.accessibilityRole() == .button,
       "Back exposes accessible navigation action")
@@ -563,7 +564,9 @@ windowView.actions.keepHistory = { limit in
 windowController.show(synthetic)
 let mainHeight = windowController.panel.frame.height
 windowView.navigate(to: .settings)
-check(windowController.panel.frame.height < mainHeight, "navigation resizes same owning panel to settings")
+check(windowController.panel.frame.height == min(windowView.preferredHeight, windowView.maximumHeight)
+      && windowController.panel.frame.height != mainHeight,
+      "navigation resizes same owning panel to settings within display bounds")
 windowView.navigate(to: .main)
 let realPanel = windowController.panel
 let productionIntegerField = windowView.control(named: "keep") as! PanelIntegerField
@@ -1221,11 +1224,12 @@ do {
     let originalMainHeight = preview.preferredHeight
     preview.navigate(to: .settings)
     func styles() -> PanelIconStyleChoices { preview.control(named: "iconStyle") as! PanelIconStyleChoices }
-    check(styles().rows.count == 5 && styles().frame.height == 310 && styles().frame.width == 358,
-          "five flat preview rows use62pt height within358pt content width")
+    check(styles().rows.count == ClipIconStyle.allCases.count
+          && styles().frame.height == CGFloat(ClipIconStyle.allCases.count) * 62 && styles().frame.width == 358,
+          "all flat preview rows use62pt height within358pt content width")
     check(styles().accessibilityRole() == .radioGroup && styles().accessibilityLabel() == "Icon style"
           && styles().accessibilityValue() as? String == "Editorial content marks", "preview group exposes accessible name and selected value")
-    check(styles().accessibilityChildren()?.count == 5, "all style rows are accessibility children")
+    check(styles().accessibilityChildren()?.count == ClipIconStyle.allCases.count, "all style rows are accessibility children")
     check(PanelIconStyleRow.samples.map { $0.0 } == [.text, .formatted, .link, .file], "fixed synthetic examples represent four reliable types")
     let before = store.settings
     preview.keyDown(with: key(48, "\t"))
@@ -1268,8 +1272,9 @@ do {
           "production mouse handler selects clicked style and anchors keyboard focus")
     preview.keyDown(with: key(126))
     check(styles().focusedIndex == 0, "Up is bounded at first row")
-    for _ in 0..<8 { preview.keyDown(with: key(125)) }
-    check(styles().focusedIndex == 4 && styles().selectedIndex == 0, "Down bounded at last row without selection")
+    for _ in 0..<(ClipIconStyle.allCases.count + 2) { preview.keyDown(with: key(125)) }
+    check(styles().focusedIndex == ClipIconStyle.allCases.count - 1 && styles().selectedIndex == 0,
+          "Down bounded at last row without selection")
     styles().isEnabled = false
     let disabledUpdates = updates
     check(styles().rows.allSatisfy { !$0.isEnabled && !$0.accessibilityPerformPress() }, "disabled group prevents all accessible presses")
@@ -1507,9 +1512,10 @@ do {
     check(back.frame.minY == 16 && back.frame.minX + 3 == 16, "Settings breadcrumb has16pt top and visible leading gutter")
     check(group.frame.minX == 16 && host.preferredHeight - host.control(named: "clearHistory")!.frame.maxY == 16
           && host.control(named: "clearHistory")!.frame.minY > group.frame.maxY + 16,
-          "five62pt previews retain16pt sides; separated Clear section has16pt bottom gutter")
-    check(group.rows.count == 5 && group.rows.allSatisfy { $0.frame.height == 62 && group.bounds.contains($0.frame) },
-          "all five preview frames are contained at native row height")
+          "all62pt previews retain16pt sides; separated Clear section has16pt bottom gutter")
+    check(group.rows.count == ClipIconStyle.allCases.count
+          && group.rows.allSatisfy { $0.frame.height == 62 && group.bounds.contains($0.frame) },
+          "all preview frames are contained at native row height")
     check(explanation.frame.minX == group.frame.minX && explanation.frame.maxX == group.frame.maxX
           && explanation.frame.height >= explanation.intrinsicContentSize.height,
           "explanation is naturally measured within aligned358pt gutters")
