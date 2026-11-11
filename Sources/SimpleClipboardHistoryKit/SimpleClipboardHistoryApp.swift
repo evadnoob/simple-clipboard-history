@@ -1,7 +1,7 @@
 import AppKit
 
 /// Entry point. The app has no Dock icon and no windows; it lives in the menu bar.
-public enum SimpleClipboardApp {
+public enum SimpleClipboardHistoryApp {
     public static func main() {
         let application = NSApplication.shared
         application.setActivationPolicy(.accessory)
@@ -17,6 +17,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var picker: PickerController?
     private var hotkey: GlobalHotkey?
 
+    static func migrateHistory(to destination: URL, environment: [String: String] = ProcessInfo.processInfo.environment,
+                               fileManager: FileManager = .default,
+                               isLegacyAppRunning: () -> Bool = {
+                                   NSWorkspace.shared.runningApplications.contains {
+                                       $0.bundleIdentifier == SettingsStore.legacyBundleIdentifier
+                                   }
+                               },
+                               move: ((URL, URL) throws -> Void)? = nil) throws {
+        guard ClipStore.dataOverride(environment: environment) == nil else { return }
+        let source = destination.deletingLastPathComponent().appendingPathComponent("simple-clipboard", isDirectory: true)
+        guard fileManager.fileExists(atPath: source.path), !fileManager.fileExists(atPath: destination.path) else { return }
+        guard !isLegacyAppRunning() else { throw HistoryMigrationError.legacyAppRunning }
+        try (move ?? { try fileManager.moveItem(at: $0, to: $1) })(source, destination)
+    }
+
+    enum HistoryMigrationError: LocalizedError {
+        case legacyAppRunning
+        var errorDescription: String? {
+            "The older Simple Clipboard app is still running. Quit it, then launch Simple Clipboard History again."
+        }
+    }
+
     /// The same local callback chain is exercised with synthetic panel content in the harness.
     static func connectControlPanelNavigation(picker: PickerController,
                                           openPanel: @escaping (SettingsPanelView.Page) -> Void) {
@@ -24,18 +46,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let settingsStore = SettingsStore()
         let store: ClipStore
         do {
-            store = try ClipStore(directory: ClipStore.defaultDirectory())
+            let destination = ClipStore.defaultDirectory()
+            try Self.migrateHistory(to: destination)
+            SettingsStore.migrateLegacySettings(defaults: .standard)
+            store = try ClipStore(directory: destination)
         } catch {
             let alert = NSAlert()
-            alert.messageText = "Simple Clipboard cannot open its history"
-            alert.informativeText = "\(error)"
+            alert.messageText = "Simple Clipboard History cannot open its history"
+            alert.informativeText = "\(error)\nIf this is a storage error, check that the Application Support folder is writable. Existing history was not intentionally discarded."
             alert.runModal()
             NSApplication.shared.terminate(nil)
             return
         }
+        let settingsStore = SettingsStore()
         let monitor = ClipboardMonitor(store: store, settings: { settingsStore.settings })
         let picker = PickerController(store: store, settingsStore: settingsStore, monitor: monitor)
         let hotkey = GlobalHotkey { [weak picker] in picker?.toggle() }

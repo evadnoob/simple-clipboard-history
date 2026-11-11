@@ -1,3 +1,0 @@
-import SimpleClipboardKit
-
-SimpleClipboardApp.main()

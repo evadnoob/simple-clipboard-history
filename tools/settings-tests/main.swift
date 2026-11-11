@@ -1,6 +1,6 @@
 // Settings storage checks. Run: bash tools/run-tests.sh
 import Foundation
-@testable import SimpleClipboardKit
+@testable import SimpleClipboardHistoryKit
 
 var checks = 0
 var failures = 0
@@ -10,7 +10,7 @@ func check(_ condition: @autoclosure () -> Bool, _ label: String) {
 }
 
 func freshDefaults() -> UserDefaults {
-    let name = "simple-clipboard-tests-\(UUID().uuidString)"
+    let name = "simple-clipboard-history-tests-\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: name)!
     defaults.removePersistentDomain(forName: name)
     return defaults

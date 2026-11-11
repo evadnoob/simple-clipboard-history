@@ -1,6 +1,6 @@
 // Capture, storage, search, retention, formatting and monitor checks. Run: bash tools/run-tests.sh
 import AppKit
-@testable import SimpleClipboardKit
+@testable import SimpleClipboardHistoryKit
 
 var checks = 0
 var failures = 0
@@ -543,7 +543,7 @@ check(Format.bytes(1536) == "1.5 KB", "kilobytes")
 check(Format.bytes(20 * 1024 * 1024) == "20.0 MB", "megabytes")
 
 // MARK: monitor and recall on a private pasteboard (never the general pasteboard)
-let pasteboard = NSPasteboard(name: NSPasteboard.Name("simple-clipboard-tests-\(UUID().uuidString)"))
+let pasteboard = NSPasteboard(name: NSPasteboard.Name("simple-clipboard-history-tests-\(UUID().uuidString)"))
 let monitorStore = freshStore()
 var monitorSettings = Settings()
 let monitor = ClipboardMonitor(pasteboard: pasteboard, store: monitorStore, settings: { monitorSettings })

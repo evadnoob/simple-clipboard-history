@@ -1,5 +1,5 @@
 import AppKit
-@testable import SimpleClipboardKit
+@testable import SimpleClipboardHistoryKit
 
 var checks = 0
 var failures = 0

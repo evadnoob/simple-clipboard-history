@@ -2,7 +2,7 @@
 # Manually sign the existing app bundle; this script never builds or changes keychain settings.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-app=SimpleClipboard.app
+app=SimpleClipboardHistory.app
 identity=${SIGNING_IDENTITY:-evadnoob Local Code Signing}
 if [[ ! -d "$app" ]]; then
     echo "Missing $app; run bash bundle.sh first." >&2

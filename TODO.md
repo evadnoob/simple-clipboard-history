@@ -1,6 +1,6 @@
 # Backlog
 
-This file is the backlog for Simple Clipboard. Keep queued work here across sessions. Do not implement the entire backlog without agreement on scope.
+This file is the backlog for Simple Clipboard History. Keep queued work here across sessions. Do not implement the entire backlog without agreement on scope.
 
 After changes pass their relevant checks, package with an ad-hoc signature and restart the app automatically. Do not use or repair signing identities or keychain permissions unless explicitly requested. A user may manually sign a completed development bundle with `bash tools/sign-app.sh` when ready.
 
@@ -28,7 +28,7 @@ Reference: `~/Desktop/clipboard design.png`. User approved the difference list. 
 
 ## Queued changes
 
-- [ ] Add an **About** page describing what Simple Clipboard is, that David Boon made it with help from AI, and its design aesthetic. Agree on the wording and level of detail before implementation. Keep it accessible from the menu bar settings panel and consistent with the menu-bar-only design; do not add a main window or preferences window.
+- [ ] Add an **About** page describing what Simple Clipboard History is, that David Boon made it with help from AI, and its design aesthetic. Agree on the wording and level of detail before implementation. Keep it accessible from the menu bar settings panel and consistent with the menu-bar-only design; do not add a main window or preferences window.
 - [x] Renamed **Picker UI** to **Look and feel**. Packaged, signed, and relaunched together with the chart-height reduction from 64 to 43 points. Panel tests pass (207 checks); live appearance still needs user verification.
 - [ ] Add password masking. Store password clips as requested, but conceal their contents in the picker, previews, and other app displays. Investigate clipboard metadata from password managers as a detection signal; do not assume arbitrary password text can be identified reliably. Decide how users can mark unrecognized clips as sensitive, whether revealing is allowed, and how search and accessibility output avoid exposing masked contents. Masking is a display feature, not encryption or secure storage. User asked: "If a password is on the clipboard, we do want to store it but we don't want to see it".
 - [x] Header tightened from 76 to 64 points, chart reduced from 31 to 17 points, and clipboard header symbol uses a broader 24×26-point frame. The History row shows the configured picker shortcut as a read-only hint. Settings rows use 16-point insets. User approved the updated panel appearance; shortcut editing is deferred to a future Settings popup.

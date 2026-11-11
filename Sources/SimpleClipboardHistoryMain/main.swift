@@ -1,0 +1,3 @@
+import SimpleClipboardHistoryKit
+
+SimpleClipboardHistoryApp.main()

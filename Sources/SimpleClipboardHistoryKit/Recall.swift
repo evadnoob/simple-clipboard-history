@@ -62,7 +62,7 @@ enum Recall {
         up?.post(tap: .cghidEventTap)
     }
 
-    /// Shows the system prompt that adds Simple Clipboard to the Accessibility list (once), then opens
+    /// Shows the system prompt that adds Simple Clipboard History to the Accessibility list (once), then opens
     /// Privacy & Security > Accessibility in System Settings.
     static func requestAccessibility() {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary

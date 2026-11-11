@@ -1,11 +1,11 @@
 #!/bin/bash
 # Build every test harness target in Package.swift and run each one, with HOME in a /tmp scratch directory.
 # Exits non-zero if any harness fails to build or fails.
-#   bash tools/run-tests.sh [scratch-directory, default /tmp/simple-clipboard-tests] [HarnessName ...]
+#   bash tools/run-tests.sh [scratch-directory, default /tmp/simple-clipboard-history-tests] [HarnessName ...]
 # With no harness names, every harness runs. Logs are in <scratch-directory>/<HarnessName>/log.
 set -uo pipefail
 cd "$(dirname "$0")/.."
-root=${1:-/tmp/simple-clipboard-tests}
+root=${1:-/tmp/simple-clipboard-history-tests}
 shift || true
 case "$root" in /tmp/*) ;; *) echo 'Scratch directory must be under /tmp' >&2; exit 2;; esac
 mkdir -p "$root"

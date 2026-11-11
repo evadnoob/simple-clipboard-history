@@ -45,13 +45,21 @@ final class ClipStore {
     private var blobDirectory: URL { directory.appendingPathComponent("blobs", isDirectory: true) }
     private var databaseURL: URL { directory.appendingPathComponent("clips.sqlite") }
 
-    /// Default ~/Library/Application Support/simple-clipboard. SIMPLE_CLIPBOARD_DATA overrides it.
+    /// Nonempty override shared by directory selection and legacy migration.
+    static func dataOverride(environment: [String: String]) -> String? {
+        for key in ["SIMPLE_CLIPBOARD_HISTORY_DATA", "SIMPLE_CLIPBOARD_DATA"] {
+            if let path = environment[key], !path.isEmpty { return path }
+        }
+        return nil
+    }
+
+    /// Default ~/Library/Application Support/simple-clipboard-history. SIMPLE_CLIPBOARD_HISTORY_DATA overrides it.
     static func defaultDirectory(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
-        if let path = environment["SIMPLE_CLIPBOARD_DATA"], !path.isEmpty {
+        if let path = dataOverride(environment: environment) {
             return URL(fileURLWithPath: (path as NSString).expandingTildeInPath, isDirectory: true)
         }
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return support.appendingPathComponent("simple-clipboard", isDirectory: true)
+        return support.appendingPathComponent("simple-clipboard-history", isDirectory: true)
     }
 
     init(directory: URL) throws {

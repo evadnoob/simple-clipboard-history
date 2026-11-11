@@ -1,6 +1,6 @@
 // Text filter, plain text extraction and recall format checks. Run: bash tools/run-tests.sh
 import AppKit
-@testable import SimpleClipboardKit
+@testable import SimpleClipboardHistoryKit
 
 var checks = 0
 var failures = 0
@@ -99,7 +99,7 @@ check(Recall.items(for: rich, format: .filter("uppercase")) == [[Representation(
 check(Recall.items(for: image, format: .filter("uppercase")) == nil, "filter on an image does not apply")
 check(Recall.items(for: rich, format: .filter("base64-decode")) == nil, "filter that does not apply returns nil")
 check(Recall.items(for: rich, format: .filter("no-such-filter")) == nil, "unknown filter returns nil")
-let pasteboard = NSPasteboard(name: NSPasteboard.Name("simple-clipboard-filter-tests-\(UUID().uuidString)"))
+let pasteboard = NSPasteboard(name: NSPasteboard.Name("simple-clipboard-history-filter-tests-\(UUID().uuidString)"))
 check(Recall.perform(items: rich, mode: .clipboard, format: .plainText, pasteboard: pasteboard) == .onClipboard, "plain recall outcome")
 check(pasteboard.pasteboardItems?.count == 1 && pasteboard.pasteboardItems?.first?.types == [.string]
       && pasteboard.string(forType: .string) == "bold text", "pasteboard holds only plain text")

@@ -1,6 +1,6 @@
 // Picker model, key mapping, drawing, preview and hotkey settings checks. Run: bash tools/run-tests.sh
 import AppKit
-@testable import SimpleClipboardKit
+@testable import SimpleClipboardHistoryKit
 
 var checks = 0
 var failures = 0
@@ -366,7 +366,7 @@ let rowsAtDefault = resizedModel.visibleRowCount
 resizedView.setFrameSize(NSSize(width: 640, height: 220))
 check(resizedModel.visibleRowCount < rowsAtDefault && resizedModel.visibleRowCount >= 3, "a smaller picker shows fewer rows")
 check(render(resizedView).pixelsWide > 0, "small picker draws")
-let sizeSuite = "simple-clipboard-picker-size-\(UUID().uuidString)"
+let sizeSuite = "simple-clipboard-history-picker-size-\(UUID().uuidString)"
 let sizeDefaults = UserDefaults(suiteName: sizeSuite)!
 let sizeStoreDirectory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("picker-size-\(UUID().uuidString)")
 let sizeStore = try! ClipStore(directory: sizeStoreDirectory)
@@ -706,7 +706,7 @@ sizeDefaults.removePersistentDomain(forName: sizeSuite)
 try? FileManager.default.removeItem(at: sizeStoreDirectory)
 
 // MARK: hotkey setting
-let suite = "simple-clipboard-picker-tests-\(UUID().uuidString)"
+let suite = "simple-clipboard-history-picker-tests-\(UUID().uuidString)"
 let defaults = UserDefaults(suiteName: suite)!
 let settingsStore = SettingsStore(defaults: defaults)
 check(settingsStore.settings.pickerHotkey == .shiftCommandV, "default hotkey is shift-command-v")
@@ -791,7 +791,7 @@ let detachedDensityView = PickerView(model: densityIntentModel)
 check(!detachedDensityView.performKeyEquivalent(with: densityEvent()), "closed detached picker cannot capture a key equivalent")
 
 do {
-    let suite = "simple-clipboard-density-shortcut-\(UUID().uuidString)"
+    let suite = "simple-clipboard-history-density-shortcut-\(UUID().uuidString)"
     let defaults = UserDefaults(suiteName: suite)!
     defer { defaults.removePersistentDomain(forName: suite) }
     let settings = SettingsStore(defaults: defaults)
@@ -803,7 +803,7 @@ do {
     let controller = PickerController(store: sizeStore, settingsStore: settings, monitor: sizeMonitor,
         defaults: defaults, model: model, screenFrame: { NSRect(x: 0, y: 0, width: 1440, height: 900) })
     var changes: [Int] = []
-    // Same store callback seam as SimpleClipboardApp, without opening or activating the panel.
+    // Same store callback seam as SimpleClipboardHistoryApp, without opening or activating the panel.
     settings.onChange = { value in changes.append(value.pickerDensity); controller.applySettings() }
     controller.saveSize(NSSize(width: 808, height: 547))
     controller.prepareToOpen()
@@ -939,7 +939,7 @@ if let directory = ProcessInfo.processInfo.environment["PICKER_SNAPSHOT_DIRECTOR
         clip(201, "Design review notes\nKeep the menu bar simple."),
         clip(202, "https://developer.apple.com/documentation/appkit"),
         imageFixture,
-        clip(204, "swift build -c release --product SimpleClipboard"),
+        clip(204, "swift build -c release --product SimpleClipboardHistory"),
         clip(205, "Thanks for the update. I will review the changes today."),
         fileFixture,
         clip(207, "# Release checklist\nRun tests\nReview settings\nVerify paste"),

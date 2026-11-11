@@ -1,4 +1,4 @@
-# Simple Clipboard
+# Simple Clipboard History
 
 A small, keyboard-first clipboard history app for macOS 13 or later. It lives in the menu bar, saves copies on disk, and pastes earlier clips into the app you are using.
 
@@ -39,16 +39,20 @@ Settings apply immediately and persist across launches. **Clear history…** is 
 
 Screenshots use synthetic clipboard content rendered by the app's test harnesses.
 
+## Upgrade from Simple Clipboard
+
+Quit the older Simple Clipboard app before launching Simple Clipboard History. On first launch, the old Application Support history directory is moved intact only if the new directory does not exist; if both exist, the new directory takes precedence and the old one is retained. A move failure is reported and prevents startup. Set `SIMPLE_CLIPBOARD_HISTORY_DATA` to override storage; legacy `SIMPLE_CLIPBOARD_DATA` remains a fallback, and the new variable takes precedence. The bundle identifier changed, so macOS may treat this as a different app: re-grant Accessibility permission and review Launch at Login in System Settings. Existing login-item approval may not follow the renamed app.
+
 ## Build and run
 
 Install the Xcode Command Line Tools. A full Xcode installation is not required.
 
 ```bash
 bash bundle.sh
-open SimpleClipboard.app
+open SimpleClipboardHistory.app
 ```
 
-Automatic paste requires **System Settings > Privacy & Security > Accessibility** permission for Simple Clipboard. Without it, recall still restores the clipboard; press Command-V yourself. Some apps may reject simulated paste or particular clipboard representations. macOS may require renewing Accessibility permission after development rebuilds.
+Automatic paste requires **System Settings > Privacy & Security > Accessibility** permission for Simple Clipboard History. Without it, recall still restores the clipboard; press Command-V yourself. Some apps may reject simulated paste or particular clipboard representations. macOS may require renewing Accessibility permission after development rebuilds.
 
 `bash bundle.sh` builds and strictly verifies an ad-hoc signed development app. It does not access the keychain or prompt for a signing password. When you are ready to use an existing stable identity, manually sign the already-built bundle:
 
@@ -60,7 +64,7 @@ The default identity is `evadnoob Local Code Signing`. To choose another existin
 
 ## Privacy and storage
 
-Copies stay in `~/Library/Application Support/simple-clipboard/`, in SQLite and content-addressed blob files. Set `SIMPLE_CLIPBOARD_DATA` to use another directory. No cloud service is required.
+Copies stay in `~/Library/Application Support/simple-clipboard-history/`, in SQLite and content-addressed blob files. Set `SIMPLE_CLIPBOARD_HISTORY_DATA` to use another directory. No cloud service is required.
 
 Copies from excluded apps, copies marked concealed or transient, and oversized copies are skipped. These checks are not a guarantee that all sensitive content is excluded. The recorded source app is the app in front when the copy is detected. Copying identical content moves its existing entry to the top.
 
