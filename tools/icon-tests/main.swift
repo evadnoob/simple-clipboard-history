@@ -36,6 +36,25 @@ for text in ["let value = 1", "printf hello", "{\"ready\":true}", "hello@example
 check(ClipIconStyle.editorialContentMarks.rawValue == "editorialContentMarks", "editorial stable persistence raw value")
 check(ClipIconStyle.editorialContentMarks.title == "Editorial content marks", "editorial approved dropdown title")
 check(ClipIconStyle.allCases.first == .current, "Current remains fresh-config default and first choice")
+check(Array(ClipIconStyle.allCases.suffix(3)) == [.fineLine, .contentGlyphs, .twoTone],
+      "new artwork is appended without changing existing selection indices")
+for (style, title, rawValue) in [(ClipIconStyle.fineLine, "Fine line", "fineLine"),
+                               (.contentGlyphs, "Content glyphs", "contentGlyphs"),
+                               (.twoTone, "Two-tone", "twoTone")] {
+    check(style.title == title && style.rawValue == rawValue && style.usesCustomArtwork,
+          "new family has stable title, persistence value and custom artwork: \(title)")
+}
+for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+    NSAppearance(named: appearance)!.performAsCurrentDrawingAppearance {
+        check(ContentMarkIcon.accent(style: .twoTone, color: .white, selected: true) == .white,
+              "selected two-tone artwork preserves foreground in \(appearance.rawValue)")
+        check(ContentMarkIcon.accent(style: .fineLine, color: .labelColor, selected: false) == .labelColor,
+              "fine line preserves monochrome foreground in \(appearance.rawValue)")
+        let accent = ContentMarkIcon.accent(style: .twoTone, color: .labelColor, selected: false).usingColorSpace(.deviceRGB)!
+        check(accent.blueComponent > accent.redComponent && accent.blueComponent > accent.greenComponent,
+              "unselected two-tone artwork has blue accent in \(appearance.rawValue)")
+    }
+}
 
 // Source gallery order, excluding the real-thumbnail slot which bypasses glyph rendering.
 let expectedGallerySymbols: [(ClipIconStyle, [String])] = [
@@ -55,10 +74,10 @@ for (style, expected) in expectedGallerySymbols {
 
 final class IconSheet: NSView {
     let style: ClipIconStyle
-    init(style: ClipIconStyle) {
+    init(style: ClipIconStyle, appearanceName: NSAppearance.Name = .aqua) {
         self.style = style
         super.init(frame: NSRect(x: 0, y: 0, width: 460, height: CGFloat(ClipIconCategory.allCases.count * 50)))
-        appearance = NSAppearance(named: .aqua)
+        appearance = NSAppearance(named: appearanceName)
     }
     required init?(coder: NSCoder) { fatalError("not used") }
     override var isFlipped: Bool { true }
@@ -75,18 +94,20 @@ final class IconSheet: NSView {
                     ClipTypeIcon.draw(category: category, style: style,
                         in: NSRect(x: slot.midX - size / 2, y: slot.midY - size / 2, width: size, height: size),
                         color: PickerView.rowForeground(selected: selected),
-                        colorSwatch: NSColor(calibratedRed: 0.31, green: 0.48, blue: 0.58, alpha: 1))
+                        colorSwatch: NSColor(calibratedRed: 0.31, green: 0.48, blue: 0.58, alpha: 1), selected: selected)
                 }
             }
         }
     }
 }
-for style in ClipIconStyle.allCases {
-    let sheet = IconSheet(style: style)
+for (style, appearanceName) in ClipIconStyle.allCases.flatMap({ style in
+    [NSAppearance.Name.aqua, .darkAqua].map { (style, $0) }
+}) {
+    let sheet = IconSheet(style: style, appearanceName: appearanceName)
     let bitmap = sheet.bitmapImageRepForCachingDisplay(in: sheet.bounds)!
     sheet.cacheDisplay(in: sheet.bounds, to: bitmap)
     for (index, category) in ClipIconCategory.allCases.enumerated() {
-        if style != .editorialContentMarks {
+        if !style.usesCustomArtwork {
             let symbol = ClipTypeIcon.symbolName(category: category, style: style)
             check(NSImage(systemSymbolName: symbol, accessibilityDescription: nil) != nil,
                   "gallery symbol available: \(style.rawValue)/\(category.rawValue)/\(symbol)")
@@ -123,7 +144,7 @@ for style in ClipIconStyle.allCases {
     if let directory = ProcessInfo.processInfo.environment["ICON_SNAPSHOT_DIRECTORY"] {
         try! FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
         try! bitmap.representation(using: .png, properties: [:])!.write(
-            to: URL(fileURLWithPath: directory).appendingPathComponent("icons-\(style.rawValue).png"))
+            to: URL(fileURLWithPath: directory).appendingPathComponent("icons-\(style.rawValue)-\(appearanceName.rawValue).png"))
     }
 }
 // MARK: Open outlines optical balance, measured in the same fixed picker slots.
