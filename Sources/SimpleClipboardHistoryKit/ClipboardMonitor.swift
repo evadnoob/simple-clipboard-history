@@ -42,7 +42,7 @@ final class ClipboardMonitor {
     var onChange: (() -> Void)?
 
     init(pasteboard: NSPasteboard = .general, store: ClipStore, settings: @escaping () -> Settings,
-         previewQueue: DispatchQueue = DispatchQueue(label: "simple-clipboard.preview-backfill", qos: .utility)) {
+         previewQueue: DispatchQueue = DispatchQueue(label: "simple-clipboard-history.preview-backfill", qos: .utility)) {
         self.pasteboard = pasteboard
         self.store = store
         self.settings = settings
@@ -100,7 +100,7 @@ final class ClipboardMonitor {
         ownChangeCount = pasteboard.changeCount
         lastChangeCount = pasteboard.changeCount
         clipboardCurrent = CurrentClipboard(changeCount: pasteboard.changeCount, state: .recorded(clip),
-                                   sourceAppName: "Simple Clipboard")
+                                   sourceAppName: "Simple Clipboard History")
         onChange?()
     }
 

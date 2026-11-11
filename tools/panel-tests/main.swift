@@ -1,7 +1,7 @@
 // Settings panel layout, controls, confirmation and keyboard checks. Run: bash tools/run-tests.sh
 import AppKit
 import ServiceManagement
-@testable import SimpleClipboardKit
+@testable import SimpleClipboardHistoryKit
 
 var checks = 0
 var failures = 0

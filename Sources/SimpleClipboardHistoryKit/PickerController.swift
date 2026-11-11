@@ -1,6 +1,6 @@
 import AppKit
 
-/// A borderless panel that takes keys without activating Simple Clipboard, so the app the user was in stays the
+/// A borderless panel that takes keys without activating Simple Clipboard History, so the app the user was in stays the
 /// active app. That is where a pasted clip goes when the picker closes. The settings panel uses it too.
 final class FloatingPanel: NSPanel {
     init(contentView: NSView, size: NSSize, resizable: Bool = false) {

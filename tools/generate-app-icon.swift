@@ -1,7 +1,7 @@
 import AppKit
 
 let output = CommandLine.arguments.dropFirst().first ?? "Resources/AppIcon.icns"
-let iconset = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("SimpleClipboard-\(UUID().uuidString).iconset")
+let iconset = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("SimpleClipboardHistory-\(UUID().uuidString).iconset")
 try FileManager.default.createDirectory(at: iconset, withIntermediateDirectories: true)
 defer { if ProcessInfo.processInfo.environment["KEEP_ICONSET"] == nil { try? FileManager.default.removeItem(at: iconset) } }
 let sizes = [("icon_16x16.png",16),("icon_16x16@2x.png",32),("icon_32x32.png",32),("icon_32x32@2x.png",64),("icon_128x128.png",128),("icon_128x128@2x.png",256),("icon_256x256.png",256),("icon_256x256@2x.png",512),("icon_512x512.png",512),("icon_512x512@2x.png",1024)]

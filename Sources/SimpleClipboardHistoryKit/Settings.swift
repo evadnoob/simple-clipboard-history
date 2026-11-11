@@ -93,6 +93,23 @@ final class SettingsStore {
         static let copyActivityDays = "copyActivityDays"
     }
 
+    static let migrationMarker = "simpleClipboardHistorySettingsMigratedV1"
+    static let legacyBundleIdentifier = "com.evadnoob.simple-clipboard"
+    static let persistedKeys = ["recallMode", "historyLimit", "maximumClipMegabytes", "ignoredApps", "capturePaused",
+                                "pickerHotkey", "alwaysPastePlainText", "pickerWidth", "pickerContentLines", "pickerDensity",
+                                "maximumVisibleItems", "iconStyle", "showTypeIcons", "showTimestamps", "showPasteSpecial",
+                                "maximumHistoryMegabytes", "copyActivityDays", "pickerManualWidth",
+                                "pickerLastWidthPreset", "pickerHeight"]
+
+    static func migrateLegacySettings(defaults: UserDefaults, legacyDomain: String = legacyBundleIdentifier) {
+        guard !defaults.bool(forKey: migrationMarker) else { return }
+        let legacy = defaults.persistentDomain(forName: legacyDomain) ?? [:]
+        for key in persistedKeys where defaults.object(forKey: key) == nil {
+            if let value = legacy[key] { defaults.set(value, forKey: key) }
+        }
+        defaults.set(true, forKey: migrationMarker)
+    }
+
     private let defaults: UserDefaults
     private(set) var settings: Settings
     /// Called after every change.

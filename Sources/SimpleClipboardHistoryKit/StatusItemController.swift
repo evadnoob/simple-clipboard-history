@@ -22,7 +22,7 @@ final class StatusItemController: NSObject, NSWindowDelegate {
         return controller
     }()
     private var panel: FloatingPanel { panelController.panel }
-    /// The app in front when the panel opened. The panel does not activate Simple Clipboard, so this is the
+    /// The app in front when the panel opened. The panel does not activate Simple Clipboard History, so this is the
     /// user's app.
     private var frontmostApp: NSRunningApplication?
     /// When the panel last closed because it lost the keyboard. A click on the menu bar item closes the panel
@@ -43,7 +43,7 @@ final class StatusItemController: NSObject, NSWindowDelegate {
         statusItem.button?.action = #selector(togglePanel)
         statusItem.button?.sendAction(on: [.leftMouseDown, .rightMouseDown])
         statusItem.button?.image = Self.icon
-        statusItem.button?.toolTip = "Simple Clipboard"
+        statusItem.button?.toolTip = "Simple Clipboard History"
         panelView.actions = makeActions()
         monitor.onChange = { [weak self] in self?.refresh() }
         refresh()
@@ -51,7 +51,7 @@ final class StatusItemController: NSObject, NSWindowDelegate {
 
     /// A template image, so macOS colors it for the menu bar in light and dark mode.
     static let icon: NSImage = {
-        let image = ClipboardIcon.image(size: NSSize(width: 16, height: 17.33), accessibilityDescription: "Simple Clipboard")
+        let image = ClipboardIcon.image(size: NSSize(width: 16, height: 17.33), accessibilityDescription: "Simple Clipboard History")
         image.isTemplate = true
         return image
     }()
@@ -69,7 +69,7 @@ final class StatusItemController: NSObject, NSWindowDelegate {
         let paused = settingsStore.settings.capturePaused
         statusItem.button?.title = "" // Statistics belong only inside the panel.
         statusItem.button?.appearsDisabled = paused
-        statusItem.button?.toolTip = paused ? "Simple Clipboard (capture paused)" : "Simple Clipboard"
+        statusItem.button?.toolTip = paused ? "Simple Clipboard History (capture paused)" : "Simple Clipboard History"
     }
 
     // MARK: panel
@@ -177,7 +177,7 @@ final class StatusItemController: NSObject, NSWindowDelegate {
     // MARK: text
 
     private func clipboardLine() -> String {
-        guard let current = monitor.current else { return "no copy since Simple Clipboard started" }
+        guard let current = monitor.current else { return "no copy since Simple Clipboard History started" }
         let source = current.sourceAppName.map { " from \($0)" } ?? ""
         switch current.state {
         case .recorded(let clip):
