@@ -33,6 +33,22 @@ for text in ["let value = 1", "printf hello", "{\"ready\":true}", "hello@example
     check(ClipIconClassifier.category(for: summary("text", text)) == .text, "no speculative classification: \(text)")
 }
 
+let statusButton = NSStatusBarButton()
+statusButton.toolTip = "stale tooltip"
+StatusItemController.configureStatusButton(statusButton, paused: false)
+check(statusButton.toolTip == nil && statusButton.accessibilityLabel() == "Simple Clipboard History",
+      "active status button has no tooltip and retains an accessible name")
+check(statusButton.image === StatusItemController.icon && !statusButton.appearsDisabled,
+      "active status button keeps the template icon undimmed")
+StatusItemController.configureStatusButton(statusButton, paused: true)
+check(statusButton.toolTip == nil && statusButton.accessibilityLabel() == "Simple Clipboard History, capture paused",
+      "paused status button has no tooltip and exposes paused accessibility state")
+check(statusButton.image === StatusItemController.icon && statusButton.appearsDisabled,
+      "paused status button keeps the same icon dimmed")
+StatusItemController.configureStatusButton(statusButton, paused: false)
+check(statusButton.toolTip == nil && statusButton.accessibilityLabel() == "Simple Clipboard History" && !statusButton.appearsDisabled,
+      "resuming restores active accessibility state without a tooltip")
+
 check(ClipIconStyle.editorialContentMarks.rawValue == "editorialContentMarks", "editorial stable persistence raw value")
 check(ClipIconStyle.editorialContentMarks.title == "Editorial content marks", "editorial approved dropdown title")
 check(ClipIconStyle.allCases.first == .current, "Current remains fresh-config default and first choice")
