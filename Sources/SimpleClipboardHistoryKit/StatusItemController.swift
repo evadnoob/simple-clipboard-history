@@ -42,8 +42,7 @@ final class StatusItemController: NSObject, NSWindowDelegate {
         statusItem.button?.target = self
         statusItem.button?.action = #selector(togglePanel)
         statusItem.button?.sendAction(on: [.leftMouseDown, .rightMouseDown])
-        statusItem.button?.image = Self.icon
-        statusItem.button?.toolTip = "Simple Clipboard History"
+        if let button = statusItem.button { Self.configureStatusButton(button, paused: false) }
         panelView.actions = makeActions()
         monitor.onChange = { [weak self] in self?.refresh() }
         refresh()
@@ -65,11 +64,16 @@ final class StatusItemController: NSObject, NSWindowDelegate {
         if panel.isVisible { showContent() }
     }
 
+    static func configureStatusButton(_ button: NSStatusBarButton, paused: Bool) {
+        button.image = icon
+        button.setAccessibilityLabel(paused ? "Simple Clipboard History, capture paused" : "Simple Clipboard History")
+        button.toolTip = nil
+        button.appearsDisabled = paused
+    }
+
     private func updateIcon() {
-        let paused = settingsStore.settings.capturePaused
         statusItem.button?.title = "" // Statistics belong only inside the panel.
-        statusItem.button?.appearsDisabled = paused
-        statusItem.button?.toolTip = paused ? "Simple Clipboard History (capture paused)" : "Simple Clipboard History"
+        if let button = statusItem.button { Self.configureStatusButton(button, paused: settingsStore.settings.capturePaused) }
     }
 
     // MARK: panel
