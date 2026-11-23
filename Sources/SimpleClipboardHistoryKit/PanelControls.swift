@@ -94,6 +94,9 @@ final class PanelButton: PanelControl {
     var title: String { didSet { needsDisplay = true } }
     var isLink: Bool
     var symbolName: String?
+    /// Custom artwork drawn in the symbol slot instead of an SF Symbol.
+    var customSymbol: ((NSRect, NSColor) -> Void)?
+    private var hasSymbol: Bool { symbolName != nil || customSymbol != nil }
     /// In-panel navigation stays borderless, with a system-colored underline for keyboard focus.
     var isNavigation = false
     /// The button Return presses in a confirmation, drawn with a filled background.
@@ -112,12 +115,12 @@ final class PanelButton: PanelControl {
     required init?(coder: NSCoder) { fatalError("not used") }
 
     override var preferredWidth: CGFloat {
-        InterfaceStyle.width(of: title, font: InterfaceStyle.controlFont) + (isLink ? 6 : InterfaceStyle.gap * 3) + (symbolName == nil ? 0 : 18)
+        InterfaceStyle.width(of: title, font: InterfaceStyle.controlFont) + (isLink ? 6 : InterfaceStyle.gap * 3) + (hasSymbol ? 18 : 0)
     }
 
     private var labelRect: NSRect {
         var rect = isLink || isNavigation ? bounds.insetBy(dx: 3, dy: 0) : bounds
-        if symbolName != nil { rect.origin.x += 18; rect.size.width -= 18 }
+        if hasSymbol { rect.origin.x += 18; rect.size.width -= 18 }
         return rect
     }
 
@@ -136,8 +139,11 @@ final class PanelButton: PanelControl {
             InterfaceStyle.strokeBorder(bounds, color: .separatorColor)
         }
         let textRect = labelRect
-        if let symbolName {
-            InterfaceStyle.drawSymbol(symbolName, in: NSRect(x: textRect.minX - 18, y: bounds.midY - 6, width: 12, height: 12), color: color)
+        let iconRect = NSRect(x: textRect.minX - 18, y: bounds.midY - 6, width: 12, height: 12)
+        if let customSymbol {
+            customSymbol(iconRect, color)
+        } else if let symbolName {
+            InterfaceStyle.drawSymbol(symbolName, in: iconRect, color: color)
         }
         InterfaceStyle.draw(title, in: textRect, font: InterfaceStyle.controlFont, color: color, alignment: isLink || isNavigation ? .left : .center)
         if isFocused {
