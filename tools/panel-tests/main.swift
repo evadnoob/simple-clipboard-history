@@ -909,9 +909,15 @@ do {
           "checkbox uses a native checked cell")
     check(checkbox("pause")?.button.controlSize == .small && checkbox("pause")?.button.font == InterfaceStyle.controlFont,
           "native checkbox typography and size are compact")
-    check(button("clearHistory") == nil && button("openPicker")?.symbolName == "list.clipboard"
+    check(button("clearHistory") == nil && button("openPicker")?.symbolName == nil
+          && button("openPicker")?.customSymbol != nil
           && button("import") == nil && button("export") == nil,
-          "restrained action symbols use their actual meaning")
+          "Open Picker uses the shared clipboard outline; no unimplemented actions are shown")
+    let openPickerButton = button("openPicker")!
+    let symbolButton = PanelButton(partName: "symbol", title: openPickerButton.title, isLink: true)
+    symbolButton.symbolName = "list.clipboard"
+    check(openPickerButton.preferredWidth == symbolButton.preferredWidth,
+          "custom clipboard icon reserves the same width as a native symbol")
     check(checkbox("pause")?.hitTest(NSPoint(x: checkbox("pause")!.frame.midX, y: checkbox("pause")!.frame.midY)) === checkbox("pause"),
           "native checkbox drawing leaves mouse handling with the panel control")
     for page in [SettingsPanelView.Page.main, .settings] {

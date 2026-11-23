@@ -486,7 +486,10 @@ final class SettingsPanelView: NSView {
                 settingsNavigation.onPress = { [weak self] in self?.navigate(to: .settings) }
                 let pickerTitle = "Open Picker" + (content.hotkeyLabel.map { "  \($0)" } ?? "")
                 let open = PanelButton(partName: "openPicker", title: pickerTitle, isLink: true)
-                open.symbolName = "list.clipboard"
+                open.customSymbol = { rect, color in
+                    color.setStroke()
+                    ClipboardIcon.outline(in: rect).stroke()
+                }
                 open.onPress = { [weak self] in self?.actions.openPicker() }
                 let quit = PanelButton(partName: "quit", title: "Quit", isLink: true)
                 quit.symbolName = "power"
